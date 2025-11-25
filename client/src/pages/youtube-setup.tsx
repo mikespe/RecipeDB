@@ -17,9 +17,7 @@ export default function YouTubeSetupPage() {
   // Test API connectivity
   const testApiMutation = useMutation({
     mutationFn: async (videoId: string) => {
-      const response = await apiRequest(`/api/youtube/test/${videoId}`, {
-        method: 'GET'
-      });
+      const response = await apiRequest('GET', `/api/youtube/test/${videoId}`);
       return response;
     },
     onSuccess: (data: any) => {
@@ -92,9 +90,9 @@ export default function YouTubeSetupPage() {
                 <li>Click "Enable"</li>
               </ol>
               <Button variant="outline" size="sm" asChild>
-                <a 
-                  href="https://console.cloud.google.com/apis/library/youtube.googleapis.com" 
-                  target="_blank" 
+                <a
+                  href="https://console.cloud.google.com/apis/library/youtube.googleapis.com"
+                  target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-2"
                 >
@@ -103,7 +101,7 @@ export default function YouTubeSetupPage() {
                 </a>
               </Button>
             </div>
-            
+
             <div className="space-y-3">
               <h3 className="font-semibold">Step 2: Create Credentials</h3>
               <ol className="text-sm space-y-1 list-decimal list-inside text-muted-foreground">
@@ -114,9 +112,9 @@ export default function YouTubeSetupPage() {
                 <li>Optionally restrict to YouTube Data API</li>
               </ol>
               <Button variant="outline" size="sm" asChild>
-                <a 
-                  href="https://console.cloud.google.com/apis/credentials" 
-                  target="_blank" 
+                <a
+                  href="https://console.cloud.google.com/apis/credentials"
+                  target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-2"
                 >
@@ -128,10 +126,10 @@ export default function YouTubeSetupPage() {
           </div>
 
           <Separator />
-          
+
           <Alert>
             <AlertDescription>
-              <strong>API Key Status:</strong> ✅ Your YouTube API key is configured and working! 
+              <strong>API Key Status:</strong> ✅ Your YouTube API key is configured and working!
               The system is now ready to extract recipes from YouTube videos.
             </AlertDescription>
           </Alert>
@@ -148,7 +146,7 @@ export default function YouTubeSetupPage() {
               <li>Process both regular YouTube videos and YouTube Shorts</li>
             </ul>
             <div className="mt-3 p-2 bg-blue-100 dark:bg-blue-900 rounded text-xs">
-              <strong>Note:</strong> OAuth2 is temporarily disabled due to Google's secure browser requirements in development. 
+              <strong>Note:</strong> OAuth2 is temporarily disabled due to Google's secure browser requirements in development.
               The API key provides excellent access for recipe extraction from public YouTube videos.
             </div>
           </div>
@@ -174,7 +172,7 @@ export default function YouTubeSetupPage() {
               onChange={(e) => setTestVideoId(e.target.value)}
               className="flex-1"
             />
-            <Button 
+            <Button
               onClick={handleTestVideo}
               disabled={testApiMutation.isPending}
             >
@@ -214,7 +212,7 @@ export default function YouTubeSetupPage() {
                   <h4 className="font-semibold">Transcript Information:</h4>
                   <div className="grid gap-2 text-sm">
                     <div className="flex items-center gap-2">
-                      <strong>Available:</strong> 
+                      <strong>Available:</strong>
                       {testResult.transcript.available ? (
                         <Badge variant="default">Yes</Badge>
                       ) : (
@@ -280,7 +278,7 @@ export default function YouTubeSetupPage() {
                 <li>• Video tags and categories</li>
               </ul>
             </div>
-            
+
             <div className="space-y-2">
               <h4 className="font-semibold">Transcript Access</h4>
               <ul className="text-sm text-muted-foreground space-y-1">

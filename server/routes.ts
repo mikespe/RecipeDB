@@ -8,11 +8,30 @@ import { YouTubeService } from "./services/youtube-service";
 import { UltimateBypass } from "./services/ultimate-bypass";
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  // Health check endpoint (before rate limiting)
+  app.get("/health", (req: Request, res: Response) => {
+    res.json({
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+      environment: process.env.NODE_ENV || 'development',
+      version: process.env.npm_package_version || '1.0.0',
+    });
+  });
+
+  app.get("/api/health", (req: Request, res: Response) => {
+    res.json({
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      service: 'recipe-api',
+    });
+  });
+
   // Get all recipes with pagination
   app.get("/api/recipes/paginated", ResponseHandler.asyncHandler(async (req: Request, res: Response) => {
     const page = parseInt(req.query.page as string) || 1;
     const limit = parseInt(req.query.limit as string) || 10;
-    
+
     const recipes = await storage.getRecipesPaginated(page, limit);
     ResponseHandler.sendSuccess(res, { recipes });
   }));
@@ -20,19 +39,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Search recipes
   app.get("/api/recipes/search", ResponseHandler.asyncHandler(async (req: Request, res: Response) => {
     const { q, tags, category, cuisine } = req.query;
-    
+
     if (!q && !tags && !category && !cuisine) {
       return ResponseHandler.sendError(res, 400, "Search query, tags, category, or cuisine is required");
     }
-    
-    const recipes = q ? 
+
+    const recipes = q ?
       await storage.searchRecipes(q as string) :
       await storage.searchRecipesAdvanced({
         tags: tags ? (tags as string).split(',') : undefined,
         category: category as string,
         cuisine: cuisine as string
       });
-    
+
     ResponseHandler.sendSuccess(res, { recipes });
   }));
 
@@ -54,7 +73,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Scrape recipe from URL
   app.post("/api/recipes/scrape", ResponseHandler.asyncHandler(async (req: Request, res: Response) => {
     const { url } = req.body;
-    
+
     if (!url) {
       return ResponseHandler.sendError(res, 400, "URL is required");
     }
@@ -81,13 +100,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Use ultimate bypass for protected sites
         console.log('Deploying ultimate bypass system for enterprise-protected site...');
         const htmlContent = await UltimateBypass.executeUltimateBypass(url);
-        
+
         if (!htmlContent) {
-          return ResponseHandler.sendError(res, 403, 
+          return ResponseHandler.sendError(res, 403,
             `${domain.includes('allrecipes.com') ? 'AllRecipes' : 'Food Network'} has extremely sophisticated anti-bot protection. Even our most advanced bypass techniques including browser automation cannot penetrate their current security measures. Try Delish, NY Times Cooking, or King Arthur Baking instead.`
           );
         }
-        
+
         // Process the bypassed content
         scrapedData = await RecipeService.processHtmlContent(htmlContent, url);
       } else {
@@ -100,7 +119,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Create recipe using centralized service
-      const recipe = await RecipeService.createRecipe(scrapedData);
+      const recipe = await RecipeService.createRecipe(scrapedData as any);
       ResponseHandler.sendSuccess(res, { recipe }, "Recipe successfully scraped and added");
     } catch (error) {
       console.error("Recipe scraping error:", error);
@@ -111,55 +130,98 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   }));
 
+  // Diagnostic endpoint to test Gemini API
+  app.get("/api/test-gemini", ResponseHandler.asyncHandler(async (req: Request, res: Response) => {
+    try {
+      const { testGeminiConnection, listAvailableModels } = await import('./gemini');
+      const connectionResult = await testGeminiConnection();
+      const modelsResult = await listAvailableModels();
+      
+      ResponseHandler.sendSuccess(res, {
+        apiKeyConfigured: !!process.env.GEMINI_API_KEY,
+        // Don't expose key length in production (security best practice)
+        apiKeyLength: process.env.NODE_ENV === 'development' 
+          ? (process.env.GEMINI_API_KEY?.length || 0)
+          : undefined,
+        connectionTest: connectionResult.success,
+        connectionError: connectionResult.error,
+        workingModel: connectionResult.workingModel,
+        availableModels: modelsResult.models,
+        modelErrors: modelsResult.errors,
+        message: connectionResult.success 
+          ? `Gemini API is working with model: ${connectionResult.workingModel}!` 
+          : `Gemini API connection failed: ${connectionResult.error || 'Unknown error'}`
+      });
+    } catch (error) {
+      console.error("Gemini diagnostic error:", error);
+      ResponseHandler.sendError(res, 500, error instanceof Error ? error.message : "Failed to test Gemini API");
+    }
+  }));
+
   // Screenshot OCR recipe extraction endpoint
   app.post("/api/recipes/screenshot", ResponseHandler.asyncHandler(async (req: Request, res: Response) => {
     const { imageData } = req.body;
-    
+
     if (!imageData) {
       return ResponseHandler.sendError(res, 400, "Image data is required");
     }
 
+    // Check if Gemini API key is configured
+    if (!process.env.GEMINI_API_KEY) {
+      return ResponseHandler.sendError(res, 500, "GEMINI_API_KEY is not configured. Please set your Gemini API key in the environment variables.");
+    }
+
     try {
-      // Mock Irish Soda Bread recipe for testing
-      const mockRecipe = {
-        title: "Traditional Irish Soda Bread",
-        ingredients: JSON.stringify([
-          "4 cups all-purpose flour",
-          "1 teaspoon salt", 
-          "1 teaspoon baking soda",
-          "1 3/4 cups buttermilk",
-          "2 tablespoons butter, melted (optional)"
-        ]),
-        directions: JSON.stringify([
-          "Preheat oven to 425°F (220°C).",
-          "In a large bowl, whisk together flour, salt, and baking soda.",
-          "Make a well in the center and pour in buttermilk.",
-          "Using a wooden spoon, stir from center outward until dough comes together.",
-          "Turn onto floured surface and knead gently 2-3 times.",
-          "Shape into a round loaf and place on greased baking sheet.",
-          "Cut a deep X on top with sharp knife.",
-          "Bake 30-35 minutes until golden brown and sounds hollow when tapped.",
-          "Cool on wire rack before slicing."
-        ]),
-        source: "Screenshot OCR Extraction",
-        imageUrl: imageData,
-        prepTimeMinutes: 10,
-        cookTimeMinutes: 35,
-        totalTimeMinutes: 45,
-        servings: 8,
-        category: "Bread",
-        cuisine: "Irish",
-        isAutoScraped: 0,
+      // Import the Gemini Vision extraction function
+      const { extractRecipeFromImage } = await import('./gemini');
+
+      // Extract recipe from image using Gemini Vision
+      const extractedData = await extractRecipeFromImage(imageData);
+
+      if (!extractedData) {
+        return ResponseHandler.sendError(res, 400, "Could not extract recipe from image. Please ensure the image contains a clear recipe with ingredients and instructions.");
+      }
+
+      // Prepare recipe data for database
+      const recipeData = {
+        title: extractedData.title,
+        description: extractedData.description || null,
+        ingredients: JSON.stringify(extractedData.ingredients),
+        directions: JSON.stringify(extractedData.instructions),
+        source: "Screenshot Upload",
+        imageUrl: imageData, // Store the base64 image
+        prepTimeMinutes: extractedData.prepTime || null,
+        cookTimeMinutes: extractedData.cookTime || null,
+        totalTimeMinutes: extractedData.totalTime || null,
+        servings: extractedData.servings || null,
+        isAutoScraped: 0, // User-uploaded
         moderationStatus: "approved"
       };
 
-      const validatedRecipe = insertRecipeSchema.parse(mockRecipe);
+      const validatedRecipe = insertRecipeSchema.parse(recipeData);
       const recipe = await storage.createRecipe(validatedRecipe);
-      
+
       ResponseHandler.sendSuccess(res, { recipe }, "Recipe successfully extracted from screenshot");
     } catch (error) {
       console.error("Screenshot processing error:", error);
-      ResponseHandler.sendError(res, 500, "Failed to process screenshot");
+      
+      // Provide more specific error messages
+      let errorMessage = "Failed to process screenshot";
+      if (error instanceof Error) {
+        errorMessage = error.message;
+        
+        // Check for API key errors
+        if (error.message.includes('API_KEY') || error.message.includes('API key')) {
+          return ResponseHandler.sendError(res, 500, errorMessage + " Please configure GEMINI_API_KEY in your environment variables.");
+        }
+        
+        // Check for quota/authentication errors
+        if (error.message.includes('quota') || error.message.includes('authentication') || error.message.includes('permission')) {
+          return ResponseHandler.sendError(res, 500, errorMessage + " Please check your Gemini API key and quota.");
+        }
+      }
+      
+      ResponseHandler.sendError(res, 500, errorMessage);
     }
   }));
 
@@ -182,7 +244,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Test ultimate bypass endpoint
   app.post("/api/test-bypass", ResponseHandler.asyncHandler(async (req: Request, res: Response) => {
     const { url } = req.body;
-    
+
     if (!url) {
       return ResponseHandler.sendError(res, 400, "URL is required");
     }
@@ -190,12 +252,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       console.log('Testing ultimate bypass system...');
       const htmlContent = await UltimateBypass.executeUltimateBypass(url);
-      
+
       if (!htmlContent) {
         return ResponseHandler.sendError(res, 403, "All bypass strategies failed");
       }
-      
-      ResponseHandler.sendSuccess(res, { 
+
+      ResponseHandler.sendSuccess(res, {
         success: true,
         contentLength: htmlContent.length,
         preview: htmlContent.substring(0, 500) + '...'

@@ -4,6 +4,7 @@
 
 export interface RecipeData {
   title: string;
+  description?: string;
   ingredients: string[];
   directions: string[];
   source?: string;
@@ -28,11 +29,11 @@ export class RecipeValidator {
    */
   static isValidRecipe(data: Partial<RecipeData>): data is RecipeData {
     return !!(
-      data.title && 
+      data.title &&
       data.title.length >= this.MIN_TITLE_LENGTH &&
-      data.ingredients && 
+      data.ingredients &&
       data.ingredients.length >= this.MIN_INGREDIENTS &&
-      data.directions && 
+      data.directions &&
       data.directions.length >= this.MIN_DIRECTIONS
     );
   }
@@ -47,6 +48,7 @@ export class RecipeValidator {
 
     return {
       title: data.title.trim(),
+      description: typeof data.description === 'string' ? data.description.trim() || undefined : undefined,
       ingredients: data.ingredients.map(ing => ing.trim()).filter(Boolean),
       directions: data.directions.map(dir => dir.trim()).filter(Boolean),
       source: typeof data.source === 'string' ? data.source.trim() || undefined : undefined,
@@ -76,14 +78,14 @@ export class RecipeValidator {
       'tasty', 'delicious', 'yummy', 'chef', 'cuisine', 'culinary',
       'foodie', 'nutrition', 'healthy', 'diet', 'vegan', 'vegetarian'
     ];
-    
+
     const content = (title + ' ' + description).toLowerCase();
     console.log(`Checking recipe video with content: "${content.substring(0, 300)}..."`);
-    
+
     // Look for any recipe-related keywords (reduced from 2+ to 1+ for now)
     const matchedKeywords = recipeKeywords.filter(keyword => content.includes(keyword));
     console.log(`Matched keywords: ${matchedKeywords.join(', ')}`);
-    
+
     return matchedKeywords.length >= 1;
   }
 }

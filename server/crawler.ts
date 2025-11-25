@@ -3,6 +3,13 @@ import * as cheerio from "cheerio";
 import { storage } from "./storage";
 import { insertRecipeSchema } from "@shared/schema";
 import { youtubeCrawler } from "./youtube-crawler";
+import { playwrightCrawler } from "./playwright-crawler";
+import { 
+  PRIORITIZED_SOURCES, 
+  batchCheckRecipes, 
+  AdaptiveRateLimiter, 
+  BoundedUrlCache 
+} from "./services/crawler-optimizer";
 
 // Alternative recipe discovery sources - Focus on sites with better access
 const RSS_SOURCES = [
@@ -12,7 +19,7 @@ const RSS_SOURCES = [
     type: "rss"
   },
   {
-    name: "Food Network RSS", 
+    name: "Food Network RSS",
     url: "https://www.foodnetwork.com/feeds/all-latest-recipes",
     type: "rss"
   },
@@ -35,7 +42,7 @@ const RECIPE_SOURCES = [
   },
   {
     name: "Food Network",
-    baseUrl: "https://www.foodnetwork.com", 
+    baseUrl: "https://www.foodnetwork.com",
     searchUrl: "https://www.foodnetwork.com/recipes/",
     recipeSelector: "a[href*='/recipes/']",
     maxPages: 3
@@ -103,7 +110,7 @@ const RECIPE_SOURCES = [
     recipeSelector: "a[href*='/recipe/']",
     maxPages: 3
   },
-  
+
   // Popular Food Blogs
   {
     name: "Minimalist Baker",
@@ -175,7 +182,7 @@ const RECIPE_SOURCES = [
     recipeSelector: "a[href*='recipe']",
     maxPages: 4
   },
-  
+
   // International & Specialty Sites
   {
     name: "Cafe Delites",
@@ -247,7 +254,7 @@ const RECIPE_SOURCES = [
     recipeSelector: "a[href*='recipe']",
     maxPages: 4
   },
-  
+
   // Additional sources that are less likely to be blocked
   {
     name: "The Kitchn",
@@ -311,20 +318,48 @@ interface CrawlJob {
 
 class RecipeCrawler {
   private activeCrawlJobs: Map<string, CrawlJob> = new Map();
-  private rateLimitDelay = 1000; // Increased to 1 second to avoid rate limiting
-  private maxConcurrentJobs = 4; // Reduced concurrent processing to avoid overwhelming servers
+  private adaptiveRateLimiter = new AdaptiveRateLimiter();
+  private urlCache = new BoundedUrlCache();
+  private maxConcurrentJobs = 4;
   private autoCrawlInterval: NodeJS.Timeout | null = null;
   private isAutoCrawlEnabled = true;
-  private crawledUrls: Map<string, { date: Date, success: boolean }> = new Map(); // Track crawled URLs with success status
-  private urlCooldownPeriod = 2 * 60 * 60 * 1000; // Reduced to 2 hours for successful crawls
-  private failedUrlCooldownPeriod = 15 * 60 * 1000; // Reduced to 15 minutes for failed crawls
+  
+  // Configurable crawl schedule (in milliseconds)
+  // Default: 6 hours (21600000ms) - good balance for recipe sites
+  // Can be overridden via CRAWL_INTERVAL_MS environment variable
+  // Common values:
+  //   - 1 hour: 3600000
+  //   - 6 hours: 21600000 (recommended)
+  //   - 12 hours: 43200000
+  //   - 24 hours (nightly): 86400000
+  private getCrawlInterval(): number {
+    const envInterval = process.env.CRAWL_INTERVAL_MS;
+    if (envInterval) {
+      const parsed = parseInt(envInterval, 10);
+      if (!isNaN(parsed) && parsed > 0) {
+        return parsed;
+      }
+    }
+    // Default: 6 hours (good balance for recipe aggregation)
+    return 6 * 60 * 60 * 1000;
+  }
+  
+  // Check if current time is within "off-peak" hours (2 AM - 6 AM)
+  // This helps avoid peak traffic times and reduces server load
+  private isOffPeakHours(): boolean {
+    const hour = new Date().getHours();
+    return hour >= 2 && hour < 6;
+  }
+  private urlCooldownPeriod = 2 * 60 * 60 * 1000; // 2 hours for successful crawls
+  private failedUrlCooldownPeriod = 15 * 60 * 1000; // 15 minutes for failed crawls
+  private maxSourcesPerCrawl = 8; // KISS: Limit to top sources per crawl
 
   async startCrawling(cuisineType: string = "popular"): Promise<string> {
     const jobId = `crawl-${Date.now()}`;
-    
+
     // Discover recipe URLs from multiple sources
     const urls = await this.discoverRecipeUrls(cuisineType);
-    
+
     const job: CrawlJob = {
       source: cuisineType,
       urls,
@@ -335,14 +370,15 @@ class RecipeCrawler {
     };
 
     this.activeCrawlJobs.set(jobId, job);
-    
-    // Start processing in background
+
+    // Start processing in background with error handling
     this.processUrlsInBackground(jobId, urls).catch(error => {
-      console.error(`Crawl job ${jobId} failed:`, error);
+      console.error(`Crawl job ${jobId} failed:`, error instanceof Error ? error.message : error);
       const job = this.activeCrawlJobs.get(jobId);
       if (job) {
         job.status = 'failed';
       }
+      // Don't let background job errors propagate
     });
 
     return jobId;
@@ -358,47 +394,66 @@ class RecipeCrawler {
 
   // Method to clear URL tracking for debugging
   clearUrlCache(): void {
-    this.crawledUrls.clear();
+    this.urlCache.clear();
     console.log('URL tracking cache cleared');
   }
 
   // Auto-crawling functionality
+  // Production-ready scheduling: Configurable intervals with off-peak awareness
   startAutoCrawling(): void {
     if (this.autoCrawlInterval) {
       clearInterval(this.autoCrawlInterval);
     }
 
-    console.log('Starting automatic recipe crawling...');
-    this.isAutoCrawlEnabled = true;
+    const crawlInterval = this.getCrawlInterval();
+    const intervalHours = crawlInterval / (60 * 60 * 1000);
     
+    console.log(`Starting automatic recipe crawling...`);
+    console.log(`Crawl interval: ${intervalHours} hours (${crawlInterval}ms)`);
+    console.log(`Configure via CRAWL_INTERVAL_MS env var (in milliseconds)`);
+    console.log(`Recommended: 21600000 (6h), 43200000 (12h), or 86400000 (24h/nightly)`);
+    
+    this.isAutoCrawlEnabled = true;
+
     // Clear some old URL cache to allow fresh attempts
     this.cleanupCrawledUrls();
+
+    // Start initial crawl immediately (only if off-peak or CRAWL_IMMEDIATE=true)
+    const shouldCrawlImmediately = process.env.CRAWL_IMMEDIATE === 'true' || this.isOffPeakHours();
     
-    // Start initial crawl immediately
-    this.startCrawling('popular').catch(console.error);
-    
-    // Schedule crawling every 5 minutes to be less aggressive
+    if (shouldCrawlImmediately) {
+      console.log('Starting initial crawl (off-peak hours or CRAWL_IMMEDIATE=true)...');
+      this.startCrawling('popular').catch((error) => {
+        console.error('Error in initial crawl:', error instanceof Error ? error.message : error);
+      });
+    } else {
+      console.log('Skipping initial crawl (peak hours). Will start on next scheduled interval.');
+    }
+
+    // Schedule crawling at configured interval
     this.autoCrawlInterval = setInterval(() => {
       if (this.isAutoCrawlEnabled) {
-        // Only start new crawl if no active jobs
         const hasActiveJobs = Array.from(this.activeCrawlJobs.values())
           .some(job => job.status === 'running');
-        
+
         if (!hasActiveJobs) {
-          // Clean up old URL tracking data
-          this.cleanupCrawledUrls();
+          // Prefer off-peak hours, but allow if CRAWL_ANYTIME=true
+          const shouldRun = process.env.CRAWL_ANYTIME === 'true' || this.isOffPeakHours();
           
-          console.log('Starting scheduled crawl...');
-          this.startCrawling('popular').catch(console.error);
-          
-          // Skip YouTube crawling due to quota issues
-          // console.log('Starting YouTube video crawl from cooking channels...');
-          // this.crawlYouTubeVideos().catch(console.error);
+          if (shouldRun) {
+            this.cleanupCrawledUrls();
+            console.log(`Starting scheduled crawl (interval: ${intervalHours}h)...`);
+            this.startCrawling('popular').catch((error) => {
+              console.error('Error in scheduled crawl:', error instanceof Error ? error.message : error);
+            });
+          } else {
+            console.log('Skipping scheduled crawl (peak hours). Set CRAWL_ANYTIME=true to override.');
+          }
         } else {
           console.log('Skipping scheduled crawl - job already running');
         }
       }
-    }, 5 * 60 * 1000); // 5 minutes - less aggressive crawling interval
+    }, crawlInterval);
   }
 
   stopAutoCrawling(): void {
@@ -423,7 +478,7 @@ class RecipeCrawler {
     try {
       console.log('Discovering cooking videos on YouTube...');
       const videos = await youtubeCrawler.discoverCookingVideos(20); // Increased for more video content
-      
+
       if (videos.length > 0) {
         console.log(`Found ${videos.length} cooking videos, processing for recipes...`);
         const recipesAdded = await youtubeCrawler.processVideosForRecipes(videos);
@@ -437,28 +492,63 @@ class RecipeCrawler {
   }
 
   private async discoverRecipeUrls(cuisineType: string): Promise<string[]> {
+    // KISS: Use prioritized sources, limit to top N
+    const sourcesToCrawl = PRIORITIZED_SOURCES
+      .sort((a, b) => a.priority - b.priority)
+      .slice(0, this.maxSourcesPerCrawl);
+
+    // Performance: Discover in parallel with concurrency limit
     const allUrls: string[] = [];
+    const concurrency = 3; // Process 3 sources at a time
     
-    for (const source of RECIPE_SOURCES) {
-      try {
-        console.log(`Discovering recipes from ${source.name}...`);
-        const urls = await this.discoverFromSource(source, cuisineType);
-        allUrls.push(...urls.slice(0, 20)); // Reduced to 20 recipes per source to avoid overwhelming servers
-        
-        // Rate limiting between sources
-        await this.delay(this.rateLimitDelay);
-      } catch (error) {
-        console.error(`Failed to discover from ${source.name}:`, error);
+    for (let i = 0; i < sourcesToCrawl.length; i += concurrency) {
+      const batch = sourcesToCrawl.slice(i, i + concurrency);
+      
+      const results = await Promise.allSettled(
+        batch.map(async (source) => {
+          try {
+            const urls = await this.discoverFromSource(source, cuisineType);
+            return urls.slice(0, 15); // Limit per source
+          } catch (error) {
+            console.error(`Failed to discover from ${source.name}:`, error);
+            return [];
+          }
+        })
+      );
+
+      results.forEach((result) => {
+        if (result.status === 'fulfilled') {
+          allUrls.push(...result.value);
+        }
+      });
+
+      // Adaptive rate limiting between batches
+      if (i + concurrency < sourcesToCrawl.length) {
+        await this.delay(this.adaptiveRateLimiter.getDelay());
       }
     }
 
     // Remove duplicates
-    return Array.from(new Set(allUrls));
+    const uniqueUrls = Array.from(new Set(allUrls));
+    
+    // Performance: Batch check for existing recipes (with error handling)
+    let existingUrls: Set<string>;
+    try {
+      existingUrls = await batchCheckRecipes(uniqueUrls);
+    } catch (error) {
+      console.error('Error in batch check, proceeding without duplicate check:', error);
+      // If batch check fails, proceed without filtering (less efficient but won't crash)
+      existingUrls = new Set();
+    }
+    
+    const newUrls = uniqueUrls.filter(url => !existingUrls.has(url));
+    console.log(`Discovered ${newUrls.length} new recipes (${existingUrls.size} already exist)`);
+    return newUrls;
   }
 
   private async discoverFromSource(source: any, cuisineType: string): Promise<string[]> {
     const urls: string[] = [];
-    
+
     try {
       // For now, just discover from main recipe pages
       const response = await axios.get(source.searchUrl, {
@@ -473,27 +563,26 @@ class RecipeCrawler {
       });
 
       const $ = cheerio.load(response.data);
-      
+
       $(source.recipeSelector).each((_, element) => {
         const href = $(element).attr('href');
         if (href) {
           const fullUrl = href.startsWith('http') ? href : `${source.baseUrl}${href}`;
+
+          // Skip URLs in cooldown period
+          const cooldownPeriod = this.urlCache.get(fullUrl)?.success 
+            ? this.urlCooldownPeriod 
+            : this.failedUrlCooldownPeriod;
           
-          // Skip URLs that were recently crawled successfully, or failed recently
-          const crawlRecord = this.crawledUrls.get(fullUrl);
-          const now = new Date();
-          if (crawlRecord) {
-            const cooldownPeriod = crawlRecord.success ? this.urlCooldownPeriod : this.failedUrlCooldownPeriod;
-            if ((now.getTime() - crawlRecord.date.getTime()) < cooldownPeriod) {
-              return; // Skip this URL
-            }
+          if (this.urlCache.shouldSkip(fullUrl, cooldownPeriod)) {
+            return;
           }
-          
-          // Filter out obvious collection/category pages
+
+          // Filter out collection/category pages
           if (this.isCollectionPage(fullUrl)) {
-            return; // Skip collection pages
+            return;
           }
-          
+
           urls.push(fullUrl);
         }
       });
@@ -509,37 +598,42 @@ class RecipeCrawler {
     const job = this.activeCrawlJobs.get(jobId);
     if (!job) return;
 
-    const batchSize = 16; // Process 16 URLs at a time - increased batch size
-    
+    const batchSize = 10; // Optimized batch size
+
     for (let i = 0; i < urls.length; i += batchSize) {
       const batch = urls.slice(i, i + batchSize);
-      
-      // Process batch concurrently but with rate limiting
-      const promises = batch.map((url, index) => 
-        this.processUrlWithDelay(url, index * (this.rateLimitDelay / batchSize))
+      const delay = this.adaptiveRateLimiter.getDelay();
+
+      // Process batch with adaptive rate limiting
+      const promises = batch.map((url, index) =>
+        this.processUrlWithDelay(url, index * (delay / batchSize))
       );
+
+      const results = await Promise.allSettled(promises);
       
-      await Promise.allSettled(promises);
-      
+      // Update rate limiter based on results
+      results.forEach((result) => {
+        if (result.status === 'fulfilled') {
+          this.adaptiveRateLimiter.recordSuccess();
+        } else {
+          this.adaptiveRateLimiter.recordFailure();
+        }
+      });
+
       // Update job progress
-      if (job) {
-        job.processed = Math.min(i + batchSize, urls.length);
-      }
-      
-      // Rate limiting between batches
-      await this.delay(this.rateLimitDelay);
+      job.processed = Math.min(i + batchSize, urls.length);
+
+      // Adaptive rate limiting between batches
+      await this.delay(delay);
     }
 
-    if (job) {
-      job.status = 'completed';
-    }
-
+    job.status = 'completed';
     console.log(`Crawl job ${jobId} completed. Processed ${job.processed}/${job.total} URLs.`);
   }
 
   private async processUrlWithDelay(url: string, delay: number): Promise<void> {
     await this.delay(delay);
-    
+
     try {
       await this.scrapeAndStoreRecipe(url);
     } catch (error) {
@@ -549,86 +643,116 @@ class RecipeCrawler {
 
   private async scrapeAndStoreRecipe(url: string): Promise<void> {
     try {
-      // Check if recipe already exists (more efficient check by source URL)
-      const existingRecipes = await storage.searchRecipes(url);
-      if (existingRecipes.some(recipe => recipe.source === url)) {
+      // Performance: Use efficient duplicate check
+      const existing = await storage.getRecipeBySource(url);
+      if (existing) {
         console.log(`Recipe already exists: ${url}`);
-        // Mark as successfully crawled
-        this.crawledUrls.set(url, { date: new Date(), success: true });
+        this.urlCache.set(url, true);
+        this.adaptiveRateLimiter.recordSuccess();
         return;
       }
 
       console.log(`Scraping recipe: ${url}`);
-      
-      // Fetch the webpage with better headers to avoid blocking
-      const response = await axios.get(url, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.5',
-          'Accept-Encoding': 'gzip, deflate',
-          'DNT': '1',
-          'Connection': 'keep-alive',
-          'Upgrade-Insecure-Requests': '1',
-        },
-        timeout: 20000,
-        maxRedirects: 5
-      });
 
-      const $ = cheerio.load(response.data);
-      
+      // Determine if we should use Playwright (for known difficult sites or as fallback)
+      const usePlaywright = url.includes('allrecipes.com') ||
+        url.includes('foodnetwork.com') ||
+        url.includes('bonappetit.com') ||
+        url.includes('epicurious.com');
+
+      let htmlContent: string | null = null;
+
+      if (usePlaywright) {
+        console.log(`Using Playwright for difficult site: ${url}`);
+        htmlContent = await playwrightCrawler.scrapePage(url);
+      }
+
+      // Fallback to Axios if Playwright wasn't used or failed
+      if (!htmlContent) {
+        try {
+          const response = await axios.get(url, {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+              'Accept-Language': 'en-US,en;q=0.5',
+              'Accept-Encoding': 'gzip, deflate',
+              'DNT': '1',
+              'Connection': 'keep-alive',
+              'Upgrade-Insecure-Requests': '1',
+            },
+            timeout: 20000,
+            maxRedirects: 5
+          });
+          htmlContent = response.data;
+        } catch (axiosError) {
+          // If Axios fails and we haven't tried Playwright yet, try it now
+          if (!usePlaywright) {
+            console.log(`Axios failed for ${url}, retrying with Playwright...`);
+            htmlContent = await playwrightCrawler.scrapePage(url);
+          } else {
+            throw axiosError;
+          }
+        }
+      }
+
+      if (!htmlContent) {
+        throw new Error('Failed to retrieve page content');
+      }
+
+      const $ = cheerio.load(htmlContent);
+
       // Use the same extraction logic from routes.ts
       let recipeData = this.extractJSONLD($);
-      
+
       if (!recipeData) {
         recipeData = this.extractMicrodata($);
       }
-      
+
       if (!recipeData) {
         recipeData = this.extractHeuristic($, url);
       }
 
       if (!recipeData) {
-        console.log(`Could not extract recipe data from: ${url}`);
-        this.crawledUrls.set(url, { date: new Date(), success: false }); // Mark as failed attempt
+        this.urlCache.set(url, false);
+        this.adaptiveRateLimiter.recordFailure();
         return;
       }
 
-      // Check if this is a collection/roundup title - extract individual recipes instead
+      // Check if this is a collection/roundup title
       if (this.isCollectionTitle(recipeData.title)) {
         console.log(`Found collection page: ${recipeData.title} - extracting individual recipes`);
         await this.extractRecipesFromCollection(url, $);
-        this.crawledUrls.set(url, { date: new Date(), success: true }); // Mark as successfully processed
+        this.urlCache.set(url, true);
         return;
       }
 
-      // Validate recipe has meaningful ingredients before storing
+      // Validate recipe has meaningful ingredients
       if (!recipeData.ingredients || recipeData.ingredients.length === 0) {
-        console.log(`No ingredients found, skipping: ${recipeData.title}`);
-        this.crawledUrls.set(url, { date: new Date(), success: false }); // Mark as failed attempt
+        this.urlCache.set(url, false);
+        this.adaptiveRateLimiter.recordFailure();
         return;
       }
 
       // Check if ingredients are meaningful (not just empty strings, too short, or placeholders)
-      const meaningfulIngredients = recipeData.ingredients.filter((ing: string) => 
-        ing && 
-        ing.trim().length > 3 && 
+      const meaningfulIngredients = recipeData.ingredients.filter((ing: string) =>
+        ing &&
+        ing.trim().length > 3 &&
         !ing.toLowerCase().includes('n/a') &&
         !ing.toLowerCase().includes('tbd') &&
         !ing.toLowerCase().includes('see description') &&
         !ing.toLowerCase().includes('varies') &&
         !/^\d+$/.test(ing.trim()) // Not just a number
       );
-      
+
       if (meaningfulIngredients.length === 0) {
-        console.log(`No meaningful ingredients found, skipping: ${recipeData.title}`);
-        this.crawledUrls.set(url, { date: new Date(), success: false }); // Mark as failed attempt
+        this.urlCache.set(url, false);
+        this.adaptiveRateLimiter.recordFailure();
         return;
       }
 
       // Auto-assign tags based on content analysis
       const autoTags = this.generateAutoTags(recipeData.title, meaningfulIngredients, recipeData.instructions || []);
-      
+
       // Mark as auto-scraped with enhanced metadata
       const recipeWithMetadata = {
         title: recipeData.title,
@@ -637,7 +761,7 @@ class RecipeCrawler {
         source: url,
         imageUrl: recipeData.images && recipeData.images.length > 0 ? recipeData.images[0] : null,
         isAutoScraped: 1,
-        
+
         // Enhanced tagging
         category: autoTags.category,
         cuisine: autoTags.cuisine,
@@ -653,12 +777,13 @@ class RecipeCrawler {
       // Validate and store
       const validatedRecipe = insertRecipeSchema.parse(recipeWithMetadata);
       await storage.createRecipe(validatedRecipe);
-      
-      // Mark URL as successfully crawled
-      this.crawledUrls.set(url, { date: new Date(), success: true });
-      
+
+      // Mark as successful
+      this.urlCache.set(url, true);
+      this.adaptiveRateLimiter.recordSuccess();
+
       console.log(`Successfully scraped and stored: ${recipeData.title}`);
-      
+
     } catch (error: any) {
       // Handle different types of errors
       if (error.response && error.response.status === 403) {
@@ -670,15 +795,16 @@ class RecipeCrawler {
       } else {
         console.error(`Error scraping ${url}:`, error.message || error);
       }
-      // Mark as failed attempt - will retry sooner
-      this.crawledUrls.set(url, { date: new Date(), success: false });
+      // Mark as failed
+      this.urlCache.set(url, false);
+      this.adaptiveRateLimiter.recordFailure();
     }
   }
 
   // Extraction methods (copied from routes.ts)
   private extractJSONLD($: cheerio.CheerioAPI) {
     const scripts = $('script[type="application/ld+json"]');
-    
+
     for (let i = 0; i < scripts.length; i++) {
       try {
         const jsonData = JSON.parse($(scripts[i]).html() || '');
@@ -710,21 +836,21 @@ class RecipeCrawler {
   }
 
   private parseJSONLDRecipe(recipe: any) {
-    const ingredients = Array.isArray(recipe.recipeIngredient) 
+    const ingredients = Array.isArray(recipe.recipeIngredient)
       ? recipe.recipeIngredient.map((ing: any) => typeof ing === 'string' ? ing : ing.text || ing.name || String(ing))
       : [];
-      
+
     const instructions = Array.isArray(recipe.recipeInstructions)
       ? recipe.recipeInstructions.map((inst: any) => {
-          if (typeof inst === 'string') return inst;
-          return inst.text || inst.name || String(inst);
-        })
+        if (typeof inst === 'string') return inst;
+        return inst.text || inst.name || String(inst);
+      })
       : [];
 
     const images = [];
     if (recipe.image) {
       if (Array.isArray(recipe.image)) {
-        images.push(...recipe.image.slice(0, 2).map((img: any) => 
+        images.push(...recipe.image.slice(0, 2).map((img: any) =>
           typeof img === 'string' ? img : img.url || img.contentUrl || String(img)
         ));
       } else {
@@ -751,7 +877,7 @@ class RecipeCrawler {
     if (!recipeEl.length) return null;
 
     const title = recipeEl.find('[itemprop="name"]').first().text().trim() || 'Untitled Recipe';
-    
+
     const ingredients: string[] = [];
     recipeEl.find('[itemprop="recipeIngredient"]').each((_, el) => {
       const ingredient = $(el).text().trim();
@@ -785,18 +911,18 @@ class RecipeCrawler {
   }
 
   private extractHeuristic($: cheerio.CheerioAPI, url: string) {
-    const title = $('h1').first().text().trim() || 
-                  $('title').text().trim() || 
-                  'Untitled Recipe';
+    const title = $('h1').first().text().trim() ||
+      $('title').text().trim() ||
+      'Untitled Recipe';
 
     const ingredients: string[] = [];
     const ingredientSelectors = [
       '.ingredients li',
-      '.recipe-ingredients li', 
+      '.recipe-ingredients li',
       '.ingredient',
       '[class*="ingredient"] li'
     ];
-    
+
     for (const selector of ingredientSelectors) {
       $(selector).each((_, el) => {
         const ingredient = $(el).text().trim();
@@ -858,19 +984,19 @@ class RecipeCrawler {
 
   private parseTime(timeString: string): number | null {
     if (!timeString) return null;
-    
+
     const iso8601Match = timeString.match(/PT(?:(\d+)H)?(?:(\d+)M)?/);
     if (iso8601Match) {
       const hours = parseInt(iso8601Match[1] || '0');
       const minutes = parseInt(iso8601Match[2] || '0');
       return hours * 60 + minutes;
     }
-    
+
     const numberMatch = timeString.match(/(\d+)/);
     if (numberMatch) {
       return parseInt(numberMatch[1]);
     }
-    
+
     return null;
   }
 
@@ -896,13 +1022,13 @@ class RecipeCrawler {
       '/top-',
       '/-ideas'
     ];
-    
+
     return collectionPatterns.some(pattern => url.toLowerCase().includes(pattern));
   }
 
   private isCollectionTitle(title: string): boolean {
     const lowerTitle = title.toLowerCase();
-    
+
     // Check for collection patterns in titles
     const collectionPatterns = [
       /\d+\s+(best|top|favorite|good)\s+.*(recipe|idea|way|thing)/,
@@ -920,7 +1046,7 @@ class RecipeCrawler {
       /^\d+.*best/,
       /^\d+.*top/
     ];
-    
+
     return collectionPatterns.some(pattern => pattern.test(lowerTitle));
   }
 
@@ -928,7 +1054,7 @@ class RecipeCrawler {
     try {
       const recipeLinks: string[] = [];
       const baseUrl = new URL(collectionUrl);
-      
+
       // Look for recipe links using various selectors
       const linkSelectors = [
         'a[href*="recipe"]',
@@ -942,7 +1068,7 @@ class RecipeCrawler {
         '.entry-title a',
         '.post-title a'
       ];
-      
+
       for (const selector of linkSelectors) {
         $(selector).each((_, element) => {
           const href = $(element).attr('href');
@@ -950,25 +1076,25 @@ class RecipeCrawler {
             let fullUrl: string;
             try {
               fullUrl = href.startsWith('http') ? href : new URL(href, baseUrl).href;
-              
+
               // Filter out obvious non-recipe links
               const lowerHref = href.toLowerCase();
-              if (!lowerHref.includes('/tag/') && 
-                  !lowerHref.includes('/category/') && 
-                  !lowerHref.includes('/author/') && 
-                  !lowerHref.includes('/search') &&
-                  !lowerHref.includes('#') &&
-                  !fullUrl.includes('pinterest.com') &&
-                  !fullUrl.includes('facebook.com') &&
-                  !fullUrl.includes('instagram.com') &&
-                  !fullUrl.includes('youtube.com') &&
-                  !fullUrl.includes('twitter.com')) {
-                
+              if (!lowerHref.includes('/tag/') &&
+                !lowerHref.includes('/category/') &&
+                !lowerHref.includes('/author/') &&
+                !lowerHref.includes('/search') &&
+                !lowerHref.includes('#') &&
+                !fullUrl.includes('pinterest.com') &&
+                !fullUrl.includes('facebook.com') &&
+                !fullUrl.includes('instagram.com') &&
+                !fullUrl.includes('youtube.com') &&
+                !fullUrl.includes('twitter.com')) {
+
                 // Check if it's actually a recipe URL pattern
-                if (lowerHref.includes('recipe') || 
-                    lowerHref.match(/\/\d{4}\/\d{2}\//) || // Date pattern
-                    lowerHref.includes('/food/') ||
-                    lowerHref.includes('/cooking/')) {
+                if (lowerHref.includes('recipe') ||
+                  lowerHref.match(/\/\d{4}\/\d{2}\//) || // Date pattern
+                  lowerHref.includes('/food/') ||
+                  lowerHref.includes('/cooking/')) {
                   recipeLinks.push(fullUrl);
                 }
               }
@@ -978,17 +1104,17 @@ class RecipeCrawler {
             }
           }
         });
-        
+
         // If we found links with this selector, we can stop trying others
         if (recipeLinks.length > 0) break;
       }
-      
+
       // Remove duplicates and limit to reasonable number
       const uniqueLinks = Array.from(new Set(recipeLinks)).slice(0, 50);
-      
+
       if (uniqueLinks.length > 0) {
         console.log(`Found ${uniqueLinks.length} individual recipes in collection: ${collectionUrl}`);
-        
+
         // Add these URLs to be processed in background
         const jobId = `collection-extract-${Date.now()}`;
         this.processUrlsInBackground(jobId, uniqueLinks).catch(error => {
@@ -997,23 +1123,16 @@ class RecipeCrawler {
       } else {
         console.log(`No individual recipe links found in collection: ${collectionUrl}`);
       }
-      
+
     } catch (error) {
       console.error(`Error extracting recipes from collection ${collectionUrl}:`, error);
     }
   }
 
-  // Clean up old crawled URLs periodically
+  // Clean up old URLs periodically (BoundedUrlCache handles this automatically, but we can force cleanup)
   private cleanupCrawledUrls(): void {
-    const now = new Date();
-    const maxCutoffTime = now.getTime() - (this.urlCooldownPeriod * 3); // Keep successful for 12 hours max
-    
-    Array.from(this.crawledUrls.entries()).forEach(([url, record]) => {
-      const cutoffTime = record.success ? maxCutoffTime : now.getTime() - (this.failedUrlCooldownPeriod * 4);
-      if (record.date.getTime() < cutoffTime) {
-        this.crawledUrls.delete(url);
-      }
-    });
+    // BoundedUrlCache automatically manages size, but we can log stats
+    console.log(`URL cache size: ${this.urlCache.size()}`);
   }
 
   private delay(ms: number): Promise<void> {
@@ -1023,7 +1142,7 @@ class RecipeCrawler {
   // AI-powered auto-tagging system
   private generateAutoTags(title: string, ingredients: string[], instructions: string[]) {
     const content = `${title} ${ingredients.join(' ')} ${instructions.join(' ')}`.toLowerCase();
-    
+
     // Auto-detect category
     let category = 'main-course'; // default
     if (content.match(/appetizer|starter|dip|chips|wings/)) category = 'appetizer';
@@ -1034,7 +1153,7 @@ class RecipeCrawler {
     if (content.match(/salad|greens|lettuce/)) category = 'salad';
     if (content.match(/bread|roll|biscuit|muffin/)) category = 'bread';
     if (content.match(/side|accompaniment/)) category = 'side-dish';
-    
+
     // Auto-detect cuisine
     let cuisine = 'american'; // default
     if (content.match(/pasta|pizza|italian|parmesan|basil/)) cuisine = 'italian';
@@ -1046,7 +1165,7 @@ class RecipeCrawler {
     if (content.match(/french|wine|butter|herb|provence/)) cuisine = 'french';
     if (content.match(/greek|feta|olive|mediterranean|oregano/)) cuisine = 'greek';
     if (content.match(/korean|kimchi|sesame|gochujang/)) cuisine = 'korean';
-    
+
     // Auto-detect dietary restrictions
     const dietaryRestrictions: string[] = [];
     if (!content.match(/meat|chicken|beef|pork|fish|seafood/)) {
@@ -1060,20 +1179,20 @@ class RecipeCrawler {
     if (!content.match(/dairy|milk|cheese|butter|cream/)) dietaryRestrictions.push('dairy-free');
     if (content.match(/keto|low.carb/)) dietaryRestrictions.push('keto');
     if (content.match(/paleo/)) dietaryRestrictions.push('paleo');
-    
+
     // Auto-detect difficulty
     let difficulty = 'easy'; // default
     const stepCount = instructions.length;
-    const complexIngredients = ingredients.filter(ing => 
+    const complexIngredients = ingredients.filter(ing =>
       ing.match(/sauce|marinade|dough|reduction|confit/)
     ).length;
-    
+
     if (stepCount > 8 || complexIngredients > 3 || content.match(/marinate|overnight|rest|chill/)) {
       difficulty = 'hard';
     } else if (stepCount > 5 || complexIngredients > 1) {
       difficulty = 'medium';
     }
-    
+
     // Generate content-based tags
     const tags: string[] = [];
     if (content.match(/quick|easy|fast|minutes/)) tags.push('quick');
@@ -1086,7 +1205,7 @@ class RecipeCrawler {
     if (content.match(/fresh|raw|cold/)) tags.push('fresh');
     if (content.match(/baked|roasted|oven/)) tags.push('baked');
     if (content.match(/grilled|bbq|barbecue/)) tags.push('grilled');
-    
+
     return {
       category,
       cuisine,

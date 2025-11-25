@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { 
   DropdownMenu, 
@@ -11,6 +11,37 @@ import { Languages, Globe } from "lucide-react";
 interface TranslationControlsProps {
   onTranslate?: (targetLang: string) => void;
 }
+
+// Language code mapping for browser translation
+const browserLangMap: Record<string, string> = {
+  'en': 'en',
+  'es': 'es',
+  'fr': 'fr',
+  'it': 'it',
+  'de': 'de',
+  'pt': 'pt',
+  'ja': 'ja',
+  'ko': 'ko',
+  'zh': 'zh-CN',
+  'ar': 'ar',
+  'hi': 'hi',
+  'ru': 'ru',
+  'sw': 'sw',
+  'am': 'am',
+  'yo': 'yo',
+  'zu': 'zu',
+  'ha': 'ha',
+  'af': 'af',
+  'th': 'th',
+  'vi': 'vi',
+  'tl': 'tl',
+  'id': 'id',
+  'ms': 'ms',
+  'bn': 'bn',
+  'ta': 'ta',
+  'ur': 'ur',
+  'fa': 'fa',
+};
 
 const languages = [
   { code: 'en', name: 'English', flag: '🇺🇸' },
@@ -47,35 +78,51 @@ const languages = [
 ];
 
 export default function TranslationControls({ onTranslate }: TranslationControlsProps) {
-  const [currentLang, setCurrentLang] = useState('en');
-  
-  const handleBrowserTranslate = () => {
-    // Trigger browser's built-in translation
-    const googleTranslateUrl = `https://translate.google.com/translate?sl=auto&tl=${currentLang}&u=${encodeURIComponent(window.location.href)}`;
-    window.open(googleTranslateUrl, '_blank');
-  };
+  const [currentLang, setCurrentLang] = useState(() => {
+    // Get saved language from localStorage or default to 'en'
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('recipe-translation-lang') || 'en';
+    }
+    return 'en';
+  });
+
+  // Update document language when currentLang changes
+  useEffect(() => {
+    const browserLang = browserLangMap[currentLang] || currentLang;
+    document.documentElement.lang = browserLang;
+    localStorage.setItem('recipe-translation-lang', currentLang);
+  }, [currentLang]);
 
   const handleLanguageSelect = (langCode: string) => {
     setCurrentLang(langCode);
     
-    // Use Google Translate element if available (requires Google Translate script)
-    if (typeof (window as any).google !== 'undefined' && (window as any).google.translate) {
-      const translateElement = (window as any).google.translate.TranslateElement;
-      if (translateElement) {
-        // Trigger Google Translate
-        const selectElement = document.querySelector('.goog-te-combo') as HTMLSelectElement;
-        if (selectElement) {
-          selectElement.value = langCode;
-          selectElement.dispatchEvent(new Event('change'));
-        }
-      }
-    } else {
-      // Fallback to opening Google Translate in new tab
-      handleBrowserTranslate();
+    // Update HTML lang attribute for browser translation
+    const browserLang = browserLangMap[langCode] || langCode;
+    document.documentElement.lang = browserLang;
+    
+    // Trigger browser translation if available (Chrome/Edge)
+    if ('translate' in document.documentElement) {
+      // Browser will automatically detect language change
+      // User may need to use browser's translate button
     }
     
     if (onTranslate) {
       onTranslate(langCode);
+    }
+  };
+
+  const handleOpenGoogleTranslate = () => {
+    // For localhost, provide instructions instead
+    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+      alert('For local development, use your browser\'s built-in translation feature:\n\n' +
+            'Chrome/Edge: Right-click → Translate to [Language]\n' +
+            'Firefox: Install a translation extension\n' +
+            'Safari: Use a translation extension\n\n' +
+            'Or deploy the app to see Google Translate integration.');
+    } else {
+      // For production, open Google Translate
+      const googleTranslateUrl = `https://translate.google.com/translate?sl=auto&tl=${currentLang}&u=${encodeURIComponent(window.location.href)}`;
+      window.open(googleTranslateUrl, '_blank');
     }
   };
 
@@ -95,7 +142,7 @@ export default function TranslationControls({ onTranslate }: TranslationControls
             <span className="hidden sm:inline text-sm">{selectedLanguage.name}</span>
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-48">
+        <DropdownMenuContent align="end" className="w-48 max-h-[400px] overflow-y-auto">
           {languages.map((language) => (
             <DropdownMenuItem
               key={language.code}
@@ -115,12 +162,12 @@ export default function TranslationControls({ onTranslate }: TranslationControls
       <Button
         variant="ghost"
         size="sm"
-        onClick={handleBrowserTranslate}
+        onClick={handleOpenGoogleTranslate}
         className="flex items-center space-x-1 text-slate-600 hover:text-slate-900"
-        title="Open in Google Translate"
+        title="Translation Help"
       >
         <Globe className="h-4 w-4" />
-        <span className="hidden sm:inline text-sm">Translate</span>
+        <span className="hidden sm:inline text-sm">Help</span>
       </Button>
     </div>
   );

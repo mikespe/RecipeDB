@@ -36,21 +36,21 @@ export class DatabaseStorage implements IStorage {
     const safePage = Math.max(1, isNaN(page) ? 1 : Math.floor(page));
     const safeLimit = Math.max(1, Math.min(100, isNaN(limit) ? 10 : Math.floor(limit)));
     const offset = (safePage - 1) * safeLimit;
-    
+
     // Get total count
     const [countResult] = await db.select({ count: sql<number>`count(*)` }).from(recipes)
       .where(eq(recipes.moderationStatus, 'approved'));
     const total = countResult.count;
-    
+
     // Get paginated recipes (most recent first)
     const paginatedRecipes = await db.select().from(recipes)
       .where(eq(recipes.moderationStatus, 'approved'))
       .orderBy(sql`${recipes.scrapedAt} DESC`)
       .limit(safeLimit)
       .offset(offset);
-    
+
     const hasMore = offset + safeLimit < total;
-    
+
     return {
       recipes: paginatedRecipes,
       total,
@@ -58,24 +58,15 @@ export class DatabaseStorage implements IStorage {
     };
   }
 
-  async getRecipeStats(): Promise<{ total: string, autoScraped: string, userAdded: number }> {
-    // Get total count
-    const [totalResult] = await db.select({ count: sql<number>`count(*)` }).from(recipes)
-      .where(eq(recipes.moderationStatus, 'approved'));
-    const total = totalResult.count;
-    
-    // Get auto-scraped count
-    const [autoScrapedResult] = await db.select({ count: sql<number>`count(*)` }).from(recipes)
-      .where(and(eq(recipes.moderationStatus, 'approved'), eq(recipes.isAutoScraped, 1)));
-    const autoScraped = autoScrapedResult.count;
-    
-    const userAdded = total - autoScraped;
-    
-    // Return consistent types to match API expectations
+  async getRecipeStats(): Promise<{ total: number, autoScraped: number, userAdded: number }> {
+    const [totalResult] = await db.select({ count: sql<number>`count(*)` }).from(recipes);
+    const [autoScrapedResult] = await db.select({ count: sql<number>`count(*)` }).from(recipes).where(eq(recipes.isAutoScraped, 1));
+    const [userAddedResult] = await db.select({ count: sql<number>`count(*)` }).from(recipes).where(eq(recipes.isAutoScraped, 0));
+
     return {
-      total: total.toString(),
-      autoScraped: autoScraped.toString(),
-      userAdded
+      total: Number(totalResult?.count || 0),
+      autoScraped: Number(autoScrapedResult?.count || 0),
+      userAdded: Number(userAddedResult?.count || 0)
     };
   }
 
@@ -89,12 +80,12 @@ export class DatabaseStorage implements IStorage {
 
   async searchRecipes(query: string): Promise<Recipe[]> {
     if (!query.trim()) return [];
-    
+
     // Split query into individual terms and clean them
     const searchTerms = query.toLowerCase().trim().split(/\s+/).filter(term => term.length > 0);
-    
+
     if (searchTerms.length === 0) return [];
-    
+
     // Create search conditions for each term (AND logic) with enhanced tag matching
     const searchConditions = searchTerms.map(term => {
       const searchPattern = `%${term}%`;
@@ -112,7 +103,7 @@ export class DatabaseStorage implements IStorage {
         ilike(recipes.source, searchPattern)
       );
     });
-    
+
     return await db.select().from(recipes)
       .where(and(
         eq(recipes.moderationStatus, 'approved'),
@@ -128,11 +119,11 @@ export class DatabaseStorage implements IStorage {
 
   async searchRecipesAdvanced(filters: SearchRecipeRequest): Promise<Recipe[]> {
     const conditions = [eq(recipes.moderationStatus, 'approved')];
-    
+
     // Enhanced multi-term text search with AND logic
     if (filters.query) {
       const searchTerms = filters.query.toLowerCase().trim().split(/\s+/).filter(term => term.length > 0);
-      
+
       if (searchTerms.length > 0) {
         const searchConditions = searchTerms.map(term => {
           const searchPattern = `%${term}%`;
@@ -150,67 +141,67 @@ export class DatabaseStorage implements IStorage {
             ilike(recipes.source, searchPattern)
           );
         });
-        
+
         const finalCondition = and(...searchConditions);
         if (finalCondition) {
           conditions.push(finalCondition);
         }
       }
     }
-    
+
     // Category filter
     if (filters.category) {
       conditions.push(eq(recipes.category, filters.category));
     }
-    
+
     // Cuisine filter
     if (filters.cuisine) {
       conditions.push(eq(recipes.cuisine, filters.cuisine));
     }
-    
+
     // Difficulty filter
     if (filters.difficulty) {
       conditions.push(eq(recipes.difficulty, filters.difficulty));
     }
-    
+
     // Time filters
     if (filters.maxPrepTime) {
       conditions.push(lte(recipes.prepTimeMinutes, filters.maxPrepTime));
     }
-    
+
     if (filters.maxCookTime) {
       conditions.push(lte(recipes.cookTimeMinutes, filters.maxCookTime));
     }
-    
+
     if (filters.maxTotalTime) {
       conditions.push(lte(recipes.totalTimeMinutes, filters.maxTotalTime));
     }
-    
+
     // Serving size filters
     if (filters.minServings) {
       conditions.push(gte(recipes.servings, filters.minServings));
     }
-    
+
     if (filters.maxServings) {
       conditions.push(lte(recipes.servings, filters.maxServings));
     }
-    
+
     // Dietary restrictions filter
     if (filters.dietaryRestrictions && filters.dietaryRestrictions.length > 0) {
-      const dietaryConditions = filters.dietaryRestrictions.map(restriction => 
+      const dietaryConditions = filters.dietaryRestrictions.map(restriction =>
         ilike(recipes.dietaryRestrictions, `%"${restriction}"%`)
       );
       conditions.push(or(...dietaryConditions)!);
     }
-    
+
     // Tags filter
     if (filters.tags && filters.tags.length > 0) {
-      const tagConditions = filters.tags.map(tag => 
+      const tagConditions = filters.tags.map(tag =>
         ilike(recipes.tags, `%"${tag}"%`)
       );
       conditions.push(or(...tagConditions)!);
     }
-    
+
     return await db.select().from(recipes)
       .where(and(...conditions))
       .orderBy(recipes.title);
@@ -220,7 +211,7 @@ export class DatabaseStorage implements IStorage {
     const recipeData = {
       ...insertRecipe
     };
-    
+
     const [recipe] = await db
       .insert(recipes)
       .values(recipeData)

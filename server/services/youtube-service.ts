@@ -57,7 +57,7 @@ export class YouTubeService {
   private static async extractWithOfficialAPI(videoId: string, url: string): Promise<RecipeData | null> {
     try {
       console.log('Attempting extraction with official YouTube API...');
-      
+
       if (!youtubeAPI.isConfigured()) {
         console.log('YouTube API not configured, skipping official method');
         return null;
@@ -65,7 +65,7 @@ export class YouTubeService {
 
       // Get video data and transcript
       const { video, transcript } = await youtubeTranscript.getVideoWithTranscript(videoId);
-      
+
       if (!video) {
         console.log('Could not get video data from YouTube API');
         return null;
@@ -74,7 +74,7 @@ export class YouTubeService {
       // First try with transcript if available
       if (youtubeTranscript.isTranscriptSuitable(transcript)) {
         console.log('Using transcript for recipe extraction');
-        return await this.extractFromTranscript(video, transcript, url);
+        return await this.extractFromTranscript(video, transcript as any, url);
       }
 
       // If no suitable transcript, try description-based extraction
@@ -102,7 +102,7 @@ export class YouTubeService {
   private static async extractFromDescription(video: YouTubeVideoData, url: string): Promise<RecipeData | null> {
     // Get full description if it's truncated
     let fullDescription = video.description || '';
-    
+
     // Enhanced content combination for better AI extraction
     const content = `Video Title: ${video.title}
 Channel: ${video.channelTitle}
@@ -124,13 +124,13 @@ INSTRUCTION FOR AI:
 This video likely demonstrates cooking techniques for ${video.title}. Extract recipe information accordingly.`;
 
     console.log(`Analyzing ${content.length} characters from video description`);
-    
+
     // Try knowledge-based extraction first for famous recipes
     const knowledgeBasedRecipe = await this.tryKnowledgeBasedExtraction(video.title, video.channelTitle, fullDescription);
     if (knowledgeBasedRecipe) {
       return knowledgeBasedRecipe;
     }
-    
+
     // Fallback to standard AI extraction
     return await this.extractRecipeWithAI(content, video.title, url, true);
   }
@@ -150,10 +150,10 @@ This video likely demonstrates cooking techniques for ${video.title}. Extract re
 
     const titleLower = title.toLowerCase();
     const matchedRecipe = famousRecipes.find(recipe => titleLower.includes(recipe));
-    
+
     if (matchedRecipe) {
       console.log(`Attempting knowledge-based extraction for: ${matchedRecipe}`);
-      
+
       const enhancedPrompt = `Extract a detailed recipe for "${title}" as demonstrated by ${channel}.
 
 Based on the video title "${title}" and description: "${description}"
@@ -169,16 +169,16 @@ Use culinary knowledge to provide a complete, authentic recipe for this classic 
       try {
         const { extractRecipeWithGemini } = await import('../gemini');
         const recipe = await extractRecipeWithGemini(enhancedPrompt, title, false);
-        
+
         if (recipe && recipe.ingredients && recipe.ingredients.length > 0) {
           console.log(`Successfully extracted knowledge-based recipe for ${matchedRecipe}`);
-          return recipe;
+          return { ...recipe, directions: recipe.instructions };
         }
       } catch (error) {
         console.log('Knowledge-based extraction failed, falling back to standard method');
       }
     }
-    
+
     return null;
   }
 
@@ -188,7 +188,7 @@ Use culinary knowledge to provide a complete, authentic recipe for this classic 
   private static async extractRecipeWithAI(content: string, videoTitle: string, url: string, descriptionOnly = false): Promise<RecipeData | null> {
     try {
       const { extractRecipeWithGemini } = await import('../gemini');
-      
+
       // Enhanced prompt for description-only extraction
       let enhancedContent = content;
       if (descriptionOnly) {
@@ -202,10 +202,10 @@ EXTRACTION INSTRUCTIONS:
 - If ingredients are mentioned without quantities, include them anyway
 - Look for any cooking hints in the description or title`;
       }
-      
+
       console.log('Using Gemini AI to extract recipe from content');
       const recipeData = await extractRecipeWithGemini(enhancedContent);
-      
+
       if (!recipeData) {
         console.log('Gemini could not extract recipe from content');
         return null;
@@ -235,10 +235,10 @@ EXTRACTION INSTRUCTIONS:
       ].some(item => {
         const itemLower = item.toLowerCase();
         return itemLower.includes('placeholder') ||
-               itemLower.includes('season the ground meat') ||
-               itemLower.includes('season the mince') ||
-               (itemLower.includes('salt') && itemLower.includes('pepper') && item.length < 25) ||
-               item.length < 8;
+          itemLower.includes('season the ground meat') ||
+          itemLower.includes('season the mince') ||
+          (itemLower.includes('salt') && itemLower.includes('pepper') && item.length < 25) ||
+          item.length < 8;
       });
 
       if (hasPlaceholders) {
@@ -247,10 +247,10 @@ EXTRACTION INSTRUCTIONS:
       }
 
       // Ensure ingredients have some specificity (not just generic terms)
-      const hasSpecificIngredients = recipeData.ingredients.some(ingredient => 
-        ingredient.length > 15 || 
+      const hasSpecificIngredients = recipeData.ingredients.some(ingredient =>
+        ingredient.length > 15 ||
         /\d/.test(ingredient) || // Contains numbers (quantities)
-        ingredient.includes('cup') || ingredient.includes('pound') || 
+        ingredient.includes('cup') || ingredient.includes('pound') ||
         ingredient.includes('tablespoon') || ingredient.includes('teaspoon')
       );
 
@@ -260,7 +260,7 @@ EXTRACTION INSTRUCTIONS:
       }
 
       const normalizedUrl = UrlUtils.normalizeYouTubeUrl(url);
-      
+
       return {
         title: recipeData.title || videoTitle,
         ingredients: recipeData.ingredients || [],
@@ -288,7 +288,7 @@ EXTRACTION INSTRUCTIONS:
   private static async extractWithCrawler(video: YouTubeVideo, url: string): Promise<RecipeData | null> {
     try {
       const { youtubeCrawler } = await import('../youtube-crawler');
-      
+
       // Get video info first
       const videoInfo = await youtubeCrawler.getVideoInfo(video.id);
       console.log(`Video info retrieved: ${videoInfo ? 'Yes' : 'No'}`);
@@ -312,7 +312,7 @@ EXTRACTION INSTRUCTIONS:
 
       // Normalize URL for consistency
       const normalizedUrl = UrlUtils.normalizeYouTubeUrl(url);
-      
+
       return {
         title: recipeData.title,
         ingredients: recipeData.ingredients || [],

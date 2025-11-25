@@ -6,13 +6,14 @@ import { z } from "zod";
 export const recipes = pgTable("recipes", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   title: text("title").notNull(),
+  description: text("description"),
   ingredients: text("ingredients").notNull(), // JSON string
   directions: text("directions").notNull(), // JSON string  
   source: text("source").notNull(), // URL string
   imageUrl: text("image_url"), // Recipe photo URL
   isAutoScraped: integer("is_auto_scraped").notNull().default(0), // 0 = user-added, 1 = auto-scraped
   moderationStatus: text("moderation_status").notNull().default("approved"), // approved, pending, rejected
-  
+
   // Enhanced tagging system
   category: text("category"), // Main course, appetizer, dessert, etc.
   cuisine: text("cuisine"), // Italian, Chinese, Mexican, etc.
@@ -24,7 +25,7 @@ export const recipes = pgTable("recipes", {
   servings: integer("servings"),
   tags: text("tags"), // JSON array of custom tags
   favoriteCount: integer("favorite_count").notNull().default(0), // Track global favorites
-  
+
   scrapedAt: text("scraped_at").default(sql`CURRENT_TIMESTAMP`),
 });
 
@@ -61,7 +62,7 @@ export const searchRecipeSchema = z.object({
 export const manualRecipeWithCaptchaSchema = insertRecipeSchema.extend({
   captchaAnswer: z.number().min(0, "Please solve the math problem"),
   captchaChallenge: z.string().min(1, "Captcha challenge is required"),
-  
+
   // Enhanced tagging fields
   category: z.string().optional(),
   cuisine: z.string().optional(),
@@ -134,3 +135,9 @@ export type User = typeof users.$inferSelect;
 export type InsertRecipe = z.infer<typeof insertRecipeSchema>;
 export type Recipe = typeof recipes.$inferSelect;
 export type ScrapeRecipeRequest = z.infer<typeof scrapeRecipeSchema>;
+
+export interface PaginatedRecipesResponse {
+  recipes: Recipe[];
+  total: number;
+  hasMore: boolean;
+}

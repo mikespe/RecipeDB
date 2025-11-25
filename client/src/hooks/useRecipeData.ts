@@ -83,10 +83,7 @@ export function useRecipeData() {
   const useCreateRecipe = () => {
     return useMutation({
       mutationFn: async (url: string) => {
-        return await apiRequest('/api/recipes/scrape', {
-          method: 'POST',
-          body: JSON.stringify({ url }),
-        });
+        return await apiRequest('POST', '/api/recipes/scrape', { url });
       },
       onSuccess: () => {
         // Invalidate all recipe-related queries

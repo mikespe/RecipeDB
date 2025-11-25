@@ -5,10 +5,14 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import TranslationControls from "@/components/translation-controls";
-import { ArrowLeft, Clock, Users, ExternalLink, Globe, User, ChefHat } from "lucide-react";
+import { ArrowLeft, Clock, Users, ExternalLink, Globe, User, ChefHat, Heart } from "lucide-react";
+import { useFavorites } from "@/hooks/useFavorites";
+import { useToast } from "@/hooks/use-toast";
 
 export default function RecipeDetail() {
   const { id } = useParams();
+  const { isFavorite, toggleFavorite } = useFavorites();
+  const { toast } = useToast();
 
   const { data: recipe, isLoading, error } = useQuery<Recipe>({
     queryKey: ['/api/recipes', id],
@@ -34,7 +38,8 @@ export default function RecipeDetail() {
                   <span>Back to Recipes</span>
                 </Button>
               </Link>
-              <TranslationControls />
+              {/* TranslationControls - Hidden for now */}
+              {/* <TranslationControls /> */}
             </div>
           </div>
         </header>
@@ -80,8 +85,19 @@ export default function RecipeDetail() {
     );
   }
 
-  const ingredients = JSON.parse(recipe.ingredients || '[]');
-  const directions = JSON.parse(recipe.directions || '[]');
+  const ingredients = (JSON.parse(recipe.ingredients || '[]') as string[]).filter(ing => ing && ing.trim().length > 0);
+  const directions = (JSON.parse(recipe.directions || '[]') as string[]).filter(dir => dir && dir.trim().length > 0);
+  const favorite = isFavorite(recipe.id);
+
+  const handleFavoriteClick = () => {
+    toggleFavorite(recipe.id);
+    toast({
+      title: favorite ? "Removed from favorites" : "Added to favorites",
+      description: favorite 
+        ? `${recipe.title} has been removed from your favorites.`
+        : `${recipe.title} has been added to your favorites.`,
+    });
+  };
 
   const handleImageError = (e: React.SyntheticEvent<HTMLImageElement>) => {
     const target = e.target as HTMLImageElement;
@@ -102,7 +118,8 @@ export default function RecipeDetail() {
                 <span>Back to Recipes</span>
               </Button>
             </Link>
-            <TranslationControls />
+            {/* TranslationControls - Hidden for now */}
+            {/* <TranslationControls /> */}
           </div>
         </div>
       </header>
@@ -111,9 +128,22 @@ export default function RecipeDetail() {
         <div className="space-y-8">
           {/* Recipe Header */}
           <div className="text-center">
-            <h1 className="text-3xl font-bold text-slate-900 mb-4 leading-tight">
-              {recipe.title}
-            </h1>
+            <div className="flex items-center justify-center gap-3 mb-4">
+              <h1 className="text-3xl font-bold text-slate-900 leading-tight">
+                {recipe.title}
+              </h1>
+              <Button
+                variant="ghost"
+                size="icon"
+                className={`h-10 w-10 rounded-full ${
+                  favorite ? 'text-red-500 hover:text-red-600' : 'text-slate-400 hover:text-red-500'
+                }`}
+                onClick={handleFavoriteClick}
+                aria-label={favorite ? 'Remove from favorites' : 'Add to favorites'}
+              >
+                <Heart className={`h-6 w-6 ${favorite ? 'fill-current' : ''}`} />
+              </Button>
+            </div>
             
             <div className="flex justify-center items-center space-x-4 mb-6">
               <Badge 
@@ -185,7 +215,7 @@ export default function RecipeDetail() {
                 <ul className="space-y-3">
                   {ingredients.map((ingredient: string, index: number) => (
                     <li 
-                      key={index} 
+                      key={`ingredient-${index}-${ingredient.slice(0, 10)}`} 
                       className="flex items-start space-x-3 p-3 bg-slate-50 rounded-lg"
                     >
                       <span className="text-blue-600 font-medium text-sm mt-0.5">
@@ -213,7 +243,7 @@ export default function RecipeDetail() {
                 <ol className="space-y-4">
                   {directions.map((direction: string, index: number) => (
                     <li 
-                      key={index} 
+                      key={`direction-${index}-${direction.slice(0, 10)}`} 
                       className="flex items-start space-x-3 p-4 bg-slate-50 rounded-lg"
                     >
                       <span className="bg-blue-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-sm font-medium flex-shrink-0 mt-0.5">
@@ -227,20 +257,6 @@ export default function RecipeDetail() {
             </Card>
           </div>
 
-          {/* Translation Note */}
-          <Card className="bg-blue-50 border-blue-200">
-            <CardContent className="p-6">
-              <div className="flex items-center space-x-3">
-                <Globe className="h-5 w-5 text-blue-600" />
-                <div>
-                  <h3 className="font-medium text-blue-900">Need this recipe in another language?</h3>
-                  <p className="text-sm text-blue-700 mt-1">
-                    Use the translation controls in the header to translate this entire page to your preferred language.
-                  </p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
         </div>
       </main>
     </div>

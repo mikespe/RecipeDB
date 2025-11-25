@@ -20,12 +20,12 @@ export class CleanRecipeService extends BaseService {
   // KISS: Simple, focused methods
   async getById(id: string): Promise<Recipe> {
     this.validateRequired({ id }, ['id']);
-    
+
     const recipe = await this.storage.getRecipe(id);
     if (!recipe) {
       throw ErrorHandler.notFound(`Recipe with id ${id} not found`);
     }
-    
+
     return recipe;
   }
 
@@ -38,7 +38,7 @@ export class CleanRecipeService extends BaseService {
     if (!query?.trim()) {
       return [];
     }
-    
+
     // Sanitize query - DRY: Single place for query sanitization
     const sanitizedQuery = query.trim().substring(0, 200);
     return await this.storage.searchRecipes(sanitizedQuery);
@@ -72,7 +72,7 @@ export class CleanRecipeService extends BaseService {
       if (error instanceof ErrorHandler) {
         throw error;
       }
-      throw ErrorHandler.scraping(`Scraping failed: ${error.message}`);
+      throw ErrorHandler.scraping(`Scraping failed: ${(error as any).message}`);
     }
   }
 }

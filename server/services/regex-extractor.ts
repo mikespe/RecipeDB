@@ -238,7 +238,7 @@ export class RegexExtractor {
       for (let i = 0; i < images.length; i++) {
         const img = $(images[i]);
         const src = img.attr('src') || img.attr('data-src') || img.attr('data-lazy-src');
-        
+
         if (src && this.isValidImageUrl(src)) {
           const score = this.scoreImage(img, src);
           if (score > 0.5) { // Threshold for quality
@@ -254,20 +254,20 @@ export class RegexExtractor {
   /**
    * Score image quality based on attributes and URL
    */
-  private static scoreImage(img: cheerio.Cheerio<cheerio.Element>, src: string): number {
+  private static scoreImage(img: cheerio.Cheerio<any>, src: string): number {
     let score = 0.3; // Base score
 
     // Check dimensions
     const width = parseInt(img.attr('width') || '0');
     const height = parseInt(img.attr('height') || '0');
-    
+
     if (width >= 300 || height >= 200) score += 0.3;
     if (width >= 500 || height >= 400) score += 0.2;
 
     // Check alt text and class for recipe relevance
     const alt = (img.attr('alt') || '').toLowerCase();
     const className = (img.attr('class') || '').toLowerCase();
-    
+
     if (alt.includes('recipe') || className.includes('recipe')) score += 0.4;
     if (alt.includes('food') || className.includes('food')) score += 0.2;
 
@@ -332,14 +332,14 @@ export class RegexExtractor {
    */
   private static looksLikeIngredient(text: string): boolean {
     const lowerText = text.toLowerCase();
-    
+
     // Must contain a measurement or common ingredient
     const measurementPattern = /\d+(?:\/\d+)?\s*(?:cup|tablespoon|teaspoon|pound|ounce|gram|liter|tsp|tbsp|lb|oz|g|l|large|medium|small|dash|pinch)s?/i;
     const commonIngredients = ['flour', 'sugar', 'salt', 'pepper', 'oil', 'butter', 'egg', 'milk', 'water', 'onion', 'garlic', 'tomato', 'cheese', 'chicken', 'beef'];
-    
-    return measurementPattern.test(text) || 
-           commonIngredients.some(ingredient => lowerText.includes(ingredient)) ||
-           /\d+\s*(?:large|medium|small)/.test(lowerText);
+
+    return measurementPattern.test(text) ||
+      commonIngredients.some(ingredient => lowerText.includes(ingredient)) ||
+      /\d+\s*(?:large|medium|small)/.test(lowerText);
   }
 
   /**
@@ -348,10 +348,10 @@ export class RegexExtractor {
   private static looksLikeDirection(text: string): boolean {
     const actionWords = ['heat', 'cook', 'bake', 'mix', 'stir', 'add', 'combine', 'place', 'remove', 'serve', 'pour', 'chop', 'cut', 'slice', 'season', 'brown', 'sauté', 'simmer', 'boil'];
     const lowerText = text.toLowerCase();
-    
-    return actionWords.some(word => lowerText.includes(word)) && 
-           text.length > 15 && 
-           text.length < 500;
+
+    return actionWords.some(word => lowerText.includes(word)) &&
+      text.length > 15 &&
+      text.length < 500;
   }
 
   /**
@@ -359,14 +359,14 @@ export class RegexExtractor {
    */
   private static isValidImageUrl(src: string): boolean {
     if (!src || src.length < 4) return false;
-    
+
     const imageExtensions = ['.jpg', '.jpeg', '.png', '.webp', '.gif'];
     const lowerSrc = src.toLowerCase();
-    
-    return imageExtensions.some(ext => lowerSrc.includes(ext)) || 
-           lowerSrc.includes('image') || 
-           lowerSrc.includes('photo') ||
-           lowerSrc.includes('img');
+
+    return imageExtensions.some(ext => lowerSrc.includes(ext)) ||
+      lowerSrc.includes('image') ||
+      lowerSrc.includes('photo') ||
+      lowerSrc.includes('img');
   }
 
   /**

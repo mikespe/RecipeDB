@@ -94,12 +94,14 @@ export default function SimpleRecipeCard({ recipe, onClick }: SimpleRecipeCardPr
           {displayIngredients.length > 0 && (
             <div className="text-sm text-slate-600">
               <div className="space-y-1">
-                {displayIngredients.map((ingredient, index) => (
-                  <div key={index} className="flex items-center text-xs">
-                    <span className="w-2 h-2 bg-blue-400 rounded-full mr-2 flex-shrink-0"></span>
-                    <span className="line-clamp-1">{ingredient}</span>
-                  </div>
-                ))}
+                {displayIngredients
+                  .filter(ing => ing && ing.trim().length > 0)
+                  .map((ingredient, index) => (
+                    <div key={`ing-${index}-${ingredient.slice(0, 10)}`} className="flex items-center text-xs">
+                      <span className="w-2 h-2 bg-blue-400 rounded-full mr-2 flex-shrink-0"></span>
+                      <span className="line-clamp-1">{ingredient}</span>
+                    </div>
+                  ))}
                 {hasMoreIngredients && (
                   <div className="text-xs text-slate-500 italic">
                     +{ingredients.length - 3} more ingredients...

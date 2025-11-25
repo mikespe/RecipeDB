@@ -1,24 +1,16 @@
 import { useState, useEffect } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Recipe } from "@shared/schema";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Recipe, PaginatedRecipesResponse } from "@shared/schema";
 import RecipeCard from "@/components/recipe-card";
-import AddRecipeModal from "@/components/add-recipe-modal";
-import SearchFilters from "@/components/search-filters";
+import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Badge } from "@/components/ui/badge";
-import TranslationControls from "@/components/translation-controls";
+import { Loader2, Plus, Search, ChefHat, ArrowUp, Heart } from "lucide-react";
+import { Link } from "wouter";
+import { useFavorites } from "@/hooks/useFavorites";
+import AddRecipeModal from "@/components/add-recipe-modal";
 import { useToast } from "@/hooks/use-toast";
-import { Utensils, Plus, Search, Database, ImageIcon } from "lucide-react";
-import UserMenu from "@/components/user-menu";
 import { useAuth } from "@/hooks/useAuth";
-import { isUnauthorizedError } from "@/lib/authUtils";
-
-interface PaginatedRecipesResponse {
-  recipes: Recipe[];
-  total: number;
-  hasMore: boolean;
-}
+import { motion, AnimatePresence } from "framer-motion";
 
 export default function Home() {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -28,18 +20,32 @@ export default function Home() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { isAuthenticated } = useAuth();
+  const { favoriteCount } = useFavorites();
+  const [showScrollTop, setShowScrollTop] = useState(false);
+
+  // Handle scroll to top visibility
+  useEffect(() => {
+    const handleScroll = () => {
+      setShowScrollTop(window.scrollY > 400);
+    };
+    window.addEventListener('scroll', handleScroll);
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
+
+  const scrollToTop = () => {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
 
   // Query for paginated recipes (initial load + load more)
   const { data: paginatedData, isLoading, error, isFetching } = useQuery<PaginatedRecipesResponse>({
-    queryKey: ['/api/recipes/paginated', { page: currentPage, limit: 10 }],
+    queryKey: ['/api/recipes/paginated', { page: currentPage, limit: 12 }],
     queryFn: async () => {
-      const response = await fetch(`/api/recipes/paginated?page=${currentPage}&limit=10`);
+      const response = await fetch(`/api/recipes/paginated?page=${currentPage}&limit=12`);
       if (!response.ok) throw new Error('Failed to fetch recipes');
       const result = await response.json();
-      // Handle nested response structure: {success: true, recipes: {recipes: [...], total, hasMore}}
       return result.recipes || result;
     },
-    enabled: !searchQuery, // Only fetch paginated data when not searching
+    enabled: !searchQuery,
   });
 
   // Query for search results
@@ -49,7 +55,6 @@ export default function Home() {
       const response = await fetch(`/api/recipes/search?q=${encodeURIComponent(searchQuery)}`);
       if (!response.ok) throw new Error('Failed to search recipes');
       const result = await response.json();
-      // Handle potential nested response structure
       return result.recipes || result;
     },
     enabled: !!searchQuery,
@@ -69,11 +74,14 @@ export default function Home() {
   useEffect(() => {
     if (paginatedData && !searchQuery) {
       if (currentPage === 1) {
-        // First page - replace all recipes
         setAllRecipes(paginatedData.recipes);
       } else {
-        // Subsequent pages - append to existing recipes
-        setAllRecipes(prev => [...prev, ...paginatedData.recipes]);
+        setAllRecipes(prev => {
+          const newRecipes = paginatedData.recipes.filter(
+            (newRecipe: Recipe) => !prev.some(existing => existing.id === newRecipe.id)
+          );
+          return [...prev, ...newRecipes];
+        });
       }
     }
   }, [paginatedData, currentPage, searchQuery]);
@@ -82,12 +90,10 @@ export default function Home() {
   const hasMoreRecipes = paginatedData?.hasMore || false;
   const totalRecipes = recipeStats?.total || 0;
   const autoScrapedCount = recipeStats?.autoScraped || 0;
-  const userAddedCount = recipeStats?.userAdded || 0;
 
   const handleSearch = (query: string) => {
     setSearchQuery(query);
     if (!query) {
-      // Reset to first page when clearing search
       setCurrentPage(1);
     }
   };
@@ -96,236 +102,208 @@ export default function Home() {
     setCurrentPage(prev => prev + 1);
   };
 
-  const rescrapeImagesMutation = useMutation({
-    mutationFn: async () => {
-      const response = await fetch('/api/rescrape-images', {
-        method: 'POST',
-      });
-      if (!response.ok) throw new Error('Failed to rescrape images');
-      return response.json();
-    },
-    onSuccess: (data) => {
-      toast({
-        title: "Image Rescraping Complete",
-        description: `Processed ${data.processed} recipes, updated ${data.updated} with new images.`,
-      });
-      queryClient.invalidateQueries({ queryKey: ['/api/recipes'] });
-      queryClient.invalidateQueries({ queryKey: ['/api/recipes/stats'] });
-    },
-    onError: () => {
-      toast({
-        title: "Error",
-        description: "Failed to rescrape images. Please try again.",
-        variant: "destructive",
-      });
-    },
-  });
-
   if (error) {
     return (
-      <div className="min-h-screen bg-slate-50">
-        <header className="bg-white shadow-sm border-b border-slate-200">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="flex items-center justify-center h-16">
-              <div className="flex items-center space-x-3">
-                <Utensils className="text-blue-600 text-2xl" />
-                <h1 className="text-xl font-semibold text-slate-900">Recipe Database</h1>
-              </div>
-            </div>
-          </div>
-        </header>
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-          <div className="text-center py-12">
-            <div className="bg-red-50 border border-red-200 rounded-xl p-8 max-w-md mx-auto">
-              <div className="text-red-600 text-3xl mb-4">⚠️</div>
-              <h3 className="text-lg font-semibold text-red-900 mb-2">Error Loading Recipes</h3>
-              <p className="text-red-700 text-sm">Unable to load recipes. Please try again later.</p>
-            </div>
-          </div>
+      <div className="flex flex-col items-center justify-center min-h-[50vh] text-center p-4">
+        <div className="bg-red-50 p-4 rounded-full mb-4">
+          <ChefHat className="h-12 w-12 text-red-500" />
         </div>
+        <h2 className="text-2xl font-bold text-slate-800 mb-2">Oops! Something went wrong</h2>
+        <p className="text-slate-600 mb-6 max-w-md">
+          We couldn't load your recipes. Please try again later.
+        </p>
+        <Button onClick={() => window.location.reload()} variant="outline">
+          Refresh Page
+        </Button>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 font-sans">
-      {/* Header */}
-      <header className="bg-white shadow-sm border-b border-slate-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          {/* Main header row */}
-          <div className="flex items-center justify-between h-16">
-            <div className="flex items-center space-x-3">
-              <Utensils className="text-blue-600 text-2xl" />
-              <h1 className="text-xl font-semibold text-slate-900">Recipe Database</h1>
-            </div>
-            
-            {/* Mobile: Only show add button, translation, and user menu */}
-            <div className="flex items-center space-x-2 md:hidden">
-              <TranslationControls />
-              <Button 
-                onClick={() => setIsAddModalOpen(true)}
-                size="sm"
-                className="bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors shadow-sm"
-              >
-                <Plus className="h-4 w-4" />
-              </Button>
-              <UserMenu />
-            </div>
-            
-            {/* Desktop: Show everything */}
-            <div className="hidden md:flex items-center space-x-4">
-              <div className="flex items-center space-x-3">
-                <Badge variant="outline" className="text-slate-700 border-slate-300 bg-slate-50">
-                  <Database className="mr-1 h-3 w-3" />
-                  Total: {totalRecipes}
-                </Badge>
-                <Badge variant="outline" className="text-blue-700 border-blue-300 bg-blue-50">
-                  <Database className="mr-1 h-3 w-3" />
-                  Auto: {autoScrapedCount}
-                </Badge>
-                <Badge variant="outline" className="text-green-700 border-green-300 bg-green-50">
-                  <Plus className="mr-1 h-3 w-3" />
-                  User: {userAddedCount}
-                </Badge>
+    <div className="min-h-screen bg-slate-50/50">
+      {/* Hero Section */}
+      <div className="relative bg-white border-b border-slate-100 overflow-hidden">
+        <div className="absolute inset-0 bg-gradient-to-r from-blue-50 to-indigo-50 opacity-50" />
+        <div className="absolute -top-24 -right-24 w-96 h-96 bg-blue-100 rounded-full blur-3xl opacity-30" />
+        <div className="absolute -bottom-24 -left-24 w-96 h-96 bg-indigo-100 rounded-full blur-3xl opacity-30" />
+
+        <div className="container mx-auto px-4 py-16 relative">
+          <div className="max-w-3xl mx-auto text-center space-y-6">
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.5 }}
+            >
+              <h1 className="text-5xl font-extrabold text-slate-900 tracking-tight mb-4">
+                Your Personal <span className="text-blue-600">Recipe Collection</span>
+              </h1>
+              <p className="text-xl text-slate-600 leading-relaxed">
+                Organize, discover, and cook your favorite meals.
+                <span className="hidden sm:inline"> Automatically extracted from your favorite websites.</span>
+              </p>
+            </motion.div>
+
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.5, delay: 0.1 }}
+              className="flex flex-col sm:flex-row gap-4 justify-center items-center mt-8"
+            >
+              <div className="relative w-full max-w-md group">
+                <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400 group-focus-within:text-blue-500 transition-colors" />
+                <Input
+                  type="text"
+                  placeholder="Search recipes, ingredients, or tags..."
+                  className="pl-12 pr-4 h-14 rounded-2xl border-slate-200 shadow-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500 text-lg transition-all"
+                  value={searchQuery}
+                  onChange={(e) => handleSearch(e.target.value)}
+                />
               </div>
-              <div className="flex items-center space-x-2">
-                <TranslationControls />
-                <Button 
-                  onClick={() => rescrapeImagesMutation.mutate()}
-                  disabled={rescrapeImagesMutation.isPending}
-                  variant="outline"
-                  size="sm"
-                  className="text-orange-600 border-orange-300 hover:bg-orange-50"
-                >
-                  <ImageIcon className="mr-2 h-4 w-4" />
-                  {rescrapeImagesMutation.isPending ? "Rescaping..." : "Find Images"}
-                </Button>
-                <UserMenu />
-                <Button 
+              <div className="flex gap-3 w-full sm:w-auto">
+                <Link href="/favorites">
+                  <Button
+                    size="lg"
+                    variant="outline"
+                    className="h-14 px-6 rounded-2xl border-slate-200 hover:bg-red-50 hover:border-red-200 hover:text-red-600 transition-all text-lg font-semibold relative"
+                  >
+                    <Heart className="mr-2 h-5 w-5" />
+                    Favorites
+                    {favoriteCount > 0 && (
+                      <span className="ml-2 bg-red-500 text-white text-xs font-bold rounded-full h-5 w-5 flex items-center justify-center">
+                        {favoriteCount}
+                      </span>
+                    )}
+                  </Button>
+                </Link>
+                <Button
+                  size="lg"
                   onClick={() => setIsAddModalOpen(true)}
-                  className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm hover:shadow-md"
+                  className="h-14 px-8 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white shadow-lg shadow-blue-200 hover:shadow-blue-300 transition-all text-lg font-semibold"
                 >
-                  <Plus className="mr-2 h-4 w-4" />
+                  <Plus className="mr-2 h-5 w-5" />
                   Add Recipe
                 </Button>
               </div>
-            </div>
-          </div>
-          
-          {/* Mobile stats row - below main header */}
-          <div className="md:hidden pb-3 border-t border-slate-100 pt-3">
-            <div className="flex items-center justify-center space-x-4">
-              <Badge variant="outline" className="text-slate-700 border-slate-300 bg-slate-50 text-xs">
-                <Database className="mr-1 h-3 w-3" />
-                Total: {totalRecipes}
-              </Badge>
-              <Badge variant="outline" className="text-blue-700 border-blue-300 bg-blue-50 text-xs">
-                <Database className="mr-1 h-3 w-3" />
-                Auto: {autoScrapedCount}
-              </Badge>
-              <Badge variant="outline" className="text-green-700 border-green-300 bg-green-50 text-xs">
-                <Plus className="mr-1 h-3 w-3" />
-                User: {userAddedCount}
-              </Badge>
-            </div>
+            </motion.div>
+
+            {/* Stats */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: 0.5, delay: 0.2 }}
+              className="flex justify-center gap-8 mt-8 text-sm font-medium text-slate-500"
+            >
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-blue-500" />
+                {totalRecipes} Recipes
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-green-500" />
+                {autoScrapedCount} Auto-Scraped
+              </div>
+            </motion.div>
           </div>
         </div>
-      </header>
+      </div>
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Search and Filters */}
-        <SearchFilters onSearch={handleSearch} />
-
-        {/* Loading State */}
-        {(isLoading || isSearching) && (
-          <div className="text-center py-12">
-            <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-            <p className="mt-4 text-slate-600">
-              {searchQuery ? "Searching recipes..." : "Loading recipes..."}
-            </p>
+      {/* Main Content */}
+      <div className="container mx-auto px-4 py-12">
+        {isLoading && currentPage === 1 ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8">
+            {[...Array(8)].map((_, i) => (
+              <div key={i} className="h-[400px] rounded-2xl bg-white border border-slate-100 shadow-sm animate-pulse" />
+            ))}
           </div>
-        )}
-
-        {/* Empty State */}
-        {!isLoading && !isSearching && recipes?.length === 0 && (
-          <div className="text-center py-12">
-            <div className="max-w-md mx-auto">
-              <Search className="text-slate-300 text-6xl mb-4 mx-auto" size={96} />
-              <h3 className="text-lg font-semibold text-slate-900 mb-2">
-                {searchQuery ? "No recipes found" : "No recipes yet"}
-              </h3>
-              <p className="text-slate-600 mb-4">
-                {searchQuery 
-                  ? "Try adjusting your search criteria or add some new recipes." 
-                  : "Add some recipes to get started with your collection."
-                }
-              </p>
-              <Button 
-                onClick={() => setIsAddModalOpen(true)}
-                className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium"
-              >
-                <Plus className="mr-2 h-4 w-4" />
-                Add Your First Recipe
-              </Button>
-            </div>
-          </div>
-        )}
-
-        {/* Recipe Grid */}
-        {!isLoading && !isSearching && recipes && recipes.length > 0 && (
+        ) : (
           <>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {recipes.map((recipe) => (
-                <RecipeCard key={recipe.id} recipe={recipe} />
-              ))}
-            </div>
-            
-            {/* Load More Button */}
-            {!searchQuery && hasMoreRecipes && (
-              <div className="flex justify-center mt-8">
-                <Button
-                  onClick={handleLoadMore}
-                  disabled={isFetching}
-                  variant="outline"
-                  size="lg"
-                  className="px-8 py-3"
+            {recipes && recipes.length > 0 ? (
+              <div className="space-y-12">
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8"
                 >
-                  {isFetching ? (
-                    <div className="flex items-center">
-                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-current mr-2"></div>
-                      Loading...
-                    </div>
-                  ) : (
-                    "Load More Recipes"
-                  )}
-                </Button>
+                  {recipes.map((recipe, index) => (
+                    <motion.div
+                      key={recipe.id}
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.3, delay: index * 0.05 }}
+                    >
+                      <RecipeCard recipe={recipe} />
+                    </motion.div>
+                  ))}
+                </motion.div>
+
+                {/* Load More */}
+                {!searchQuery && hasMoreRecipes && (
+                  <div className="flex justify-center pt-8">
+                    <Button
+                      variant="outline"
+                      size="lg"
+                      onClick={handleLoadMore}
+                      disabled={isFetching}
+                      className="h-12 px-8 rounded-xl border-slate-200 hover:bg-white hover:border-blue-300 hover:text-blue-600 transition-all"
+                    >
+                      {isFetching ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Loading more...
+                        </>
+                      ) : (
+                        "Load More Recipes"
+                      )}
+                    </Button>
+                  </div>
+                )}
               </div>
+            ) : (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="text-center py-24 bg-white rounded-3xl border border-dashed border-slate-200"
+              >
+                <div className="bg-blue-50 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6">
+                  <ChefHat className="h-10 w-10 text-blue-500" />
+                </div>
+                <h3 className="text-2xl font-bold text-slate-900 mb-2">
+                  {searchQuery ? "No recipes found" : "Start your collection"}
+                </h3>
+                <p className="text-slate-500 max-w-md mx-auto mb-8">
+                  {searchQuery
+                    ? `We couldn't find any recipes matching "${searchQuery}". Try a different search term.`
+                    : "Add your first recipe by pasting a URL from your favorite cooking site."}
+                </p>
+                <Button
+                  size="lg"
+                  onClick={() => setIsAddModalOpen(true)}
+                  className="rounded-xl bg-blue-600 hover:bg-blue-700 text-white shadow-lg shadow-blue-200"
+                >
+                  <Plus className="mr-2 h-5 w-5" />
+                  Add New Recipe
+                </Button>
+              </motion.div>
             )}
           </>
         )}
+      </div>
 
-        {/* Loading Skeleton */}
-        {(isLoading || isSearching) && (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {[...Array(6)].map((_, i) => (
-              <div key={i} className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-                <Skeleton className="w-full h-48" />
-                <div className="p-5">
-                  <Skeleton className="h-6 w-3/4 mb-2" />
-                  <Skeleton className="h-4 w-1/2 mb-3" />
-                  <div className="space-y-2">
-                    <Skeleton className="h-4 w-full" />
-                    <Skeleton className="h-4 w-2/3" />
-                  </div>
-                  <Skeleton className="h-10 w-full mt-4" />
-                </div>
-              </div>
-            ))}
-          </div>
+      {/* Scroll to Top Button */}
+      <AnimatePresence>
+        {showScrollTop && (
+          <motion.button
+            initial={{ opacity: 0, scale: 0.8 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.8 }}
+            onClick={scrollToTop}
+            className="fixed bottom-8 right-8 p-4 bg-white text-blue-600 rounded-full shadow-xl border border-slate-100 hover:bg-blue-50 transition-colors z-50"
+          >
+            <ArrowUp className="h-6 w-6" />
+          </motion.button>
         )}
-      </main>
+      </AnimatePresence>
 
-      <AddRecipeModal 
+      <AddRecipeModal
         isOpen={isAddModalOpen}
         onClose={() => setIsAddModalOpen(false)}
       />

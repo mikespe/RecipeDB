@@ -10,8 +10,11 @@ import memoize from "memoizee";
 import connectPg from "connect-pg-simple";
 import { storage } from "./storage";
 
-if (!process.env.REPLIT_DOMAINS) {
-  throw new Error("Environment variable REPLIT_DOMAINS not provided");
+// Replit-specific configuration (optional for non-Replit deployments)
+if (!process.env.REPLIT_DOMAINS && process.env.NODE_ENV === 'production') {
+  // Only throw in production if using Replit-specific features
+  // For other platforms, this can be ignored
+  console.warn("REPLIT_DOMAINS not set - Replit OAuth features will be disabled");
 }
 
 const getOidcConfig = memoize(

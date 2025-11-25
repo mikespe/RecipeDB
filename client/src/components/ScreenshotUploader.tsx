@@ -2,9 +2,9 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Upload, ImageIcon, AlertCircle } from "lucide-react";
+import { Upload, ImageIcon, AlertCircle, X, Loader2 } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { isValidImageFile } from "@/utils/imageUtils";
 
 interface ScreenshotUploaderProps {
   onSubmit: (data: { url: string; screenshot: File }) => void;
@@ -18,7 +18,7 @@ export function ScreenshotUploader({ onSubmit, isLoading }: ScreenshotUploaderPr
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file && file.type.startsWith('image/')) {
+    if (file && isValidImageFile(file)) {
       setScreenshot(file);
       const preview = URL.createObjectURL(file);
       setPreviewUrl(preview);
@@ -27,86 +27,106 @@ export function ScreenshotUploader({ onSubmit, isLoading }: ScreenshotUploaderPr
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (url && screenshot) {
-      onSubmit({ url, screenshot });
+    if (screenshot) {
+      onSubmit({ url: url || "Screenshot Upload", screenshot });
     }
   };
 
+  const clearImage = () => {
+    setScreenshot(null);
+    setPreviewUrl(null);
+  };
+
   return (
-    <Card className="w-full max-w-2xl">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <ImageIcon className="h-5 w-5" />
-          Screenshot Recipe Submission
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
-        <Alert className="mb-4">
-          <AlertCircle className="h-4 w-4" />
-          <AlertDescription>
-            For recipes from AllRecipes or Food Network that can't be automatically scraped, 
-            upload a screenshot and we'll extract the recipe details using AI.
-          </AlertDescription>
-        </Alert>
+    <div className="space-y-4">
+      <Alert className="bg-blue-50 border-blue-200">
+        <AlertCircle className="h-4 w-4 text-blue-600" />
+        <AlertDescription className="text-blue-800">
+          Upload a screenshot of a recipe and we'll extract the details using AI vision.
+        </AlertDescription>
+      </Alert>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <Label htmlFor="recipe-url">Recipe URL</Label>
-            <Input
-              id="recipe-url"
-              type="url"
-              placeholder="https://www.allrecipes.com/recipe/..."
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div>
+          <Label htmlFor="screenshot" className="text-slate-700 font-semibold">Recipe Screenshot</Label>
+          <div className="mt-2">
+            <input
+              id="screenshot"
+              type="file"
+              accept="image/*"
+              onChange={handleFileChange}
+              className="hidden"
               required
+              disabled={isLoading}
             />
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => document.getElementById('screenshot')?.click()}
+              disabled={isLoading}
+              className="w-full h-12 border-2 border-dashed border-slate-300 hover:border-blue-500 hover:bg-blue-50 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Upload className="h-5 w-5 mr-2" />
+              {screenshot ? 'Change Screenshot' : 'Choose Image'}
+            </Button>
           </div>
+        </div>
 
-          <div>
-            <Label htmlFor="screenshot">Recipe Screenshot</Label>
-            <div className="mt-2">
-              <input
-                id="screenshot"
-                type="file"
-                accept="image/*"
-                onChange={handleFileChange}
-                className="hidden"
-                required
-              />
+        {previewUrl && (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label className="text-slate-700 font-semibold">Preview</Label>
               <Button
                 type="button"
-                variant="outline"
-                onClick={() => document.getElementById('screenshot')?.click()}
-                className="w-full"
+                variant="ghost"
+                size="sm"
+                onClick={clearImage}
+                className="h-8 text-slate-500 hover:text-red-600"
               >
-                <Upload className="h-4 w-4 mr-2" />
-                {screenshot ? 'Change Screenshot' : 'Upload Screenshot'}
+                <X className="h-4 w-4 mr-1" />
+                Remove
               </Button>
             </div>
-          </div>
-
-          {previewUrl && (
-            <div className="mt-4">
-              <Label>Preview</Label>
-              <div className="mt-2 border rounded-lg overflow-hidden">
-                <img
-                  src={previewUrl}
-                  alt="Recipe screenshot preview"
-                  className="w-full h-64 object-cover"
-                />
-              </div>
+            <div className="border-2 border-slate-200 rounded-xl overflow-hidden">
+              <img
+                src={previewUrl}
+                alt="Recipe screenshot preview"
+                className="w-full max-h-48 object-contain bg-slate-50"
+              />
             </div>
-          )}
+          </div>
+        )}
 
-          <Button 
-            type="submit" 
-            disabled={!url || !screenshot || isLoading}
-            className="w-full"
-          >
-            {isLoading ? 'Processing...' : 'Extract Recipe from Screenshot'}
-          </Button>
-        </form>
-      </CardContent>
-    </Card>
+        <div>
+          <Label htmlFor="recipe-url" className="text-slate-700 font-semibold">
+            Source URL <span className="text-slate-400 font-normal">(optional)</span>
+          </Label>
+          <Input
+            id="recipe-url"
+            type="url"
+            placeholder="https://example.com/recipe (optional)"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            disabled={isLoading}
+            className="mt-2 border-slate-200 focus:border-blue-500 focus:ring-blue-500 rounded-xl disabled:opacity-50 disabled:cursor-not-allowed"
+          />
+        </div>
+
+        <Button
+          type="submit"
+          disabled={!screenshot || isLoading}
+          className="w-full h-12 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-semibold text-lg shadow-lg shadow-blue-200 hover:shadow-blue-300 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {isLoading ? (
+            <>
+              <Loader2 className="h-5 w-5 mr-2 animate-spin" />
+              Extracting Recipe...
+            </>
+          ) : (
+            'Extract Recipe'
+          )}
+        </Button>
+      </form>
+    </div>
   );
 }
