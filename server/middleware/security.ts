@@ -19,24 +19,40 @@ export function configureCORS(app: Express) {
     ? [] // Must be set in production
     : ['http://localhost:5000', 'http://localhost:5001', 'http://127.0.0.1:5000', 'http://127.0.0.1:5001'];
 
-  app.use(cors({
-    origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
-      // Allow requests with no origin (mobile apps, Postman, etc.) in development
-      if (!origin && process.env.NODE_ENV !== 'production') {
-        return callback(null, true);
-      }
+  app.use((req, res, next) => {
+    // Skip CORS for static assets - they're served from the same origin
+    // Static assets don't need CORS checks
+    if (req.path.startsWith('/assets/') || 
+        req.path.startsWith('/src/') ||
+        req.path.match(/\.(js|css|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot)$/)) {
+      return next();
+    }
 
-      if (!origin || allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        callback(new Error('Not allowed by CORS'));
-      }
-    },
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
-    exposedHeaders: ['X-Request-ID'],
-  }));
+    // Apply CORS to API and other routes
+    cors({
+      origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+        // Allow requests with no origin (mobile apps, Postman, etc.) in development
+        if (!origin && process.env.NODE_ENV !== 'production') {
+          return callback(null, true);
+        }
+
+        // Allow same-origin requests (no origin header means same origin)
+        if (!origin) {
+          return callback(null, true);
+        }
+
+        if (allowedOrigins.includes(origin)) {
+          callback(null, true);
+        } else {
+          callback(new Error('Not allowed by CORS'));
+        }
+      },
+      credentials: true,
+      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-ID'],
+      exposedHeaders: ['X-Request-ID'],
+    })(req, res, next);
+  });
 }
 
 /**
