@@ -7,6 +7,7 @@ import { UrlUtils } from "./url-utils";
 import { RecipeValidator, type RecipeData } from "./recipe-validator";
 import { youtubeAPI, YouTubeVideoData } from './youtube-api';
 import { youtubeTranscript, TranscriptResult } from './youtube-transcript';
+import { HtmlSanitizer } from './html-sanitizer';
 
 export interface YouTubeVideo {
   id: string;
@@ -261,10 +262,11 @@ EXTRACTION INSTRUCTIONS:
 
       const normalizedUrl = UrlUtils.normalizeYouTubeUrl(url);
 
+      // Sanitize all text fields to remove any HTML markup
       return {
-        title: recipeData.title || videoTitle,
-        ingredients: recipeData.ingredients || [],
-        directions: recipeData.instructions || recipeData.directions || [],
+        title: HtmlSanitizer.stripHtml(recipeData.title || videoTitle),
+        ingredients: HtmlSanitizer.stripHtmlFromArray(recipeData.ingredients || []),
+        directions: HtmlSanitizer.stripHtmlFromArray(recipeData.instructions || recipeData.directions || []),
         source: normalizedUrl || url,
         imageUrl: recipeData.imageUrl,
         prepTimeMinutes: recipeData.prepTimeMinutes,
@@ -313,10 +315,11 @@ EXTRACTION INSTRUCTIONS:
       // Normalize URL for consistency
       const normalizedUrl = UrlUtils.normalizeYouTubeUrl(url);
 
+      // Sanitize all text fields to remove any HTML markup
       return {
-        title: recipeData.title,
-        ingredients: recipeData.ingredients || [],
-        directions: recipeData.instructions || recipeData.directions || [],
+        title: HtmlSanitizer.stripHtml(recipeData.title),
+        ingredients: HtmlSanitizer.stripHtmlFromArray(recipeData.ingredients || []),
+        directions: HtmlSanitizer.stripHtmlFromArray(recipeData.instructions || recipeData.directions || []),
         source: normalizedUrl || url,
         imageUrl: recipeData.imageUrl,
         prepTimeMinutes: recipeData.prepTimeMinutes,

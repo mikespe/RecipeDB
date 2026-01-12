@@ -7,6 +7,7 @@ import { CookieJar } from 'tough-cookie';
 import axios, { AxiosRequestConfig } from 'axios';
 import * as cheerio from 'cheerio';
 import { ScrapedRecipeData } from './recipe-service';
+import { HtmlSanitizer } from './html-sanitizer';
 
 interface ScrapingConfig {
   usePlaywright?: boolean;
@@ -577,14 +578,17 @@ export class EnhancedScraper {
 
   private static parseJsonLdRecipe(recipe: any): Omit<ScrapedRecipeData, 'source'> | null {
     try {
-      const ingredients = Array.isArray(recipe.recipeIngredient) 
-        ? recipe.recipeIngredient.map((ing: any) => typeof ing === 'string' ? ing : ing.text || '').filter(Boolean)
+      const ingredients = Array.isArray(recipe.recipeIngredient)
+        ? recipe.recipeIngredient.map((ing: any) => {
+            const text = typeof ing === 'string' ? ing : (ing.text || '');
+            return HtmlSanitizer.stripHtml(text);
+          }).filter(Boolean)
         : [];
 
       const directions = Array.isArray(recipe.recipeInstructions)
         ? recipe.recipeInstructions.map((inst: any) => {
-            if (typeof inst === 'string') return inst;
-            return inst.text || inst.name || '';
+            const text = typeof inst === 'string' ? inst : (inst.text || inst.name || '');
+            return HtmlSanitizer.stripHtml(text);
           }).filter(Boolean)
         : [];
 

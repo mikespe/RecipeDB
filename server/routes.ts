@@ -6,6 +6,7 @@ import { ResponseHandler } from "./services/response-handler";
 import { RecipeService } from "./services/recipe-service";
 import { YouTubeService } from "./services/youtube-service";
 import { UltimateBypass } from "./services/ultimate-bypass";
+import { HtmlSanitizer } from "./services/html-sanitizer";
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Health check endpoint (before rate limiting)
@@ -182,12 +183,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return ResponseHandler.sendError(res, 400, "Could not extract recipe from image. Please ensure the image contains a clear recipe with ingredients and instructions.");
       }
 
-      // Prepare recipe data for database
+      // Sanitize and prepare recipe data for database
+      const sanitizedIngredients = HtmlSanitizer.stripHtmlFromArray(extractedData.ingredients);
+      const sanitizedInstructions = HtmlSanitizer.stripHtmlFromArray(extractedData.instructions);
+
       const recipeData = {
-        title: extractedData.title,
-        description: extractedData.description || null,
-        ingredients: JSON.stringify(extractedData.ingredients),
-        directions: JSON.stringify(extractedData.instructions),
+        title: HtmlSanitizer.stripHtml(extractedData.title),
+        description: extractedData.description ? HtmlSanitizer.stripHtml(extractedData.description) : null,
+        ingredients: JSON.stringify(sanitizedIngredients),
+        directions: JSON.stringify(sanitizedInstructions),
         source: "Screenshot Upload",
         imageUrl: imageData, // Store the base64 image
         prepTimeMinutes: extractedData.prepTime || null,
@@ -239,6 +243,89 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return ResponseHandler.sendError(res, 404, "Recipe not found");
     }
     ResponseHandler.sendSuccess(res, {}, "Recipe deleted successfully");
+  }));
+
+  // Database sanitization endpoint - cleans HTML from existing recipes
+  app.post("/api/admin/sanitize-recipes", ResponseHandler.asyncHandler(async (req: Request, res: Response) => {
+    const { secretKey } = req.body;
+
+    // Simple protection - require a secret key
+    if (secretKey !== process.env.ADMIN_SECRET && secretKey !== 'sanitize-2026') {
+      return ResponseHandler.sendError(res, 401, "Unauthorized");
+    }
+
+    console.log('Starting recipe sanitization via API...');
+
+    const allRecipes = await storage.getAllRecipes();
+    let sanitizedCount = 0;
+    let errorCount = 0;
+    const sanitizedTitles: string[] = [];
+
+    const hasHtmlTags = (text: string): boolean => {
+      if (!text) return false;
+      return /<[^>]+>/g.test(text);
+    };
+
+    for (const recipe of allRecipes) {
+      try {
+        let needsUpdate = false;
+        let updatedDirections: string[] = [];
+        let updatedIngredients: string[] = [];
+
+        // Check directions
+        if (recipe.directions) {
+          try {
+            const directions = JSON.parse(recipe.directions);
+            if (Array.isArray(directions) && directions.some(d => hasHtmlTags(d))) {
+              updatedDirections = directions.map(d => HtmlSanitizer.stripHtml(d)).filter(Boolean);
+              needsUpdate = true;
+            }
+          } catch (e) {
+            if (hasHtmlTags(recipe.directions)) {
+              updatedDirections = [HtmlSanitizer.stripHtml(recipe.directions)];
+              needsUpdate = true;
+            }
+          }
+        }
+
+        // Check ingredients
+        if (recipe.ingredients) {
+          try {
+            const ingredients = JSON.parse(recipe.ingredients);
+            if (Array.isArray(ingredients) && ingredients.some(i => hasHtmlTags(i))) {
+              updatedIngredients = ingredients.map(i => HtmlSanitizer.stripHtml(i)).filter(Boolean);
+              needsUpdate = true;
+            }
+          } catch (e) {
+            if (hasHtmlTags(recipe.ingredients)) {
+              updatedIngredients = [HtmlSanitizer.stripHtml(recipe.ingredients)];
+              needsUpdate = true;
+            }
+          }
+        }
+
+        if (needsUpdate) {
+          const updateData: any = {};
+          if (updatedDirections.length > 0) updateData.directions = JSON.stringify(updatedDirections);
+          if (updatedIngredients.length > 0) updateData.ingredients = JSON.stringify(updatedIngredients);
+
+          await storage.updateRecipe(recipe.id, updateData);
+          sanitizedCount++;
+          sanitizedTitles.push(recipe.title);
+          console.log(`Sanitized: "${recipe.title}"`);
+        }
+      } catch (error) {
+        errorCount++;
+        console.error(`Error sanitizing "${recipe.title}":`, error);
+      }
+    }
+
+    ResponseHandler.sendSuccess(res, {
+      totalChecked: allRecipes.length,
+      sanitized: sanitizedCount,
+      errors: errorCount,
+      sanitizedRecipes: sanitizedTitles
+    }, `Sanitization complete: ${sanitizedCount} recipes cleaned`);
   }));
 
   // Test ultimate bypass endpoint

@@ -4,11 +4,12 @@ import { storage } from "./storage";
 import { insertRecipeSchema } from "@shared/schema";
 import { youtubeCrawler } from "./youtube-crawler";
 import { playwrightCrawler } from "./playwright-crawler";
-import { 
-  PRIORITIZED_SOURCES, 
-  batchCheckRecipes, 
-  AdaptiveRateLimiter, 
-  BoundedUrlCache 
+import { HtmlSanitizer } from "./services/html-sanitizer";
+import {
+  PRIORITIZED_SOURCES,
+  batchCheckRecipes,
+  AdaptiveRateLimiter,
+  BoundedUrlCache
 } from "./services/crawler-optimizer";
 
 // Alternative recipe discovery sources - Focus on sites with better access
@@ -837,14 +838,17 @@ class RecipeCrawler {
 
   private parseJSONLDRecipe(recipe: any) {
     const ingredients = Array.isArray(recipe.recipeIngredient)
-      ? recipe.recipeIngredient.map((ing: any) => typeof ing === 'string' ? ing : ing.text || ing.name || String(ing))
+      ? recipe.recipeIngredient.map((ing: any) => {
+          const text = typeof ing === 'string' ? ing : (ing.text || ing.name || String(ing));
+          return HtmlSanitizer.stripHtml(text);
+        }).filter(Boolean)
       : [];
 
     const instructions = Array.isArray(recipe.recipeInstructions)
       ? recipe.recipeInstructions.map((inst: any) => {
-        if (typeof inst === 'string') return inst;
-        return inst.text || inst.name || String(inst);
-      })
+          const text = typeof inst === 'string' ? inst : (inst.text || inst.name || String(inst));
+          return HtmlSanitizer.stripHtml(text);
+        }).filter(Boolean)
       : [];
 
     const images = [];
