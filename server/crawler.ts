@@ -321,9 +321,13 @@ class RecipeCrawler {
   private activeCrawlJobs: Map<string, CrawlJob> = new Map();
   private adaptiveRateLimiter = new AdaptiveRateLimiter();
   private urlCache = new BoundedUrlCache();
-  private maxConcurrentJobs = 4;
+  private maxConcurrentJobs = 12; // Increased for better throughput
   private autoCrawlInterval: NodeJS.Timeout | null = null;
   private isAutoCrawlEnabled = true;
+
+  // Per-domain rate limiting for protected sites (track last request time)
+  private domainLastRequest: Map<string, number> = new Map();
+  private protectedSiteDelay = 8000; // 8 seconds between requests to same protected domain
   
   // Configurable crawl schedule (in milliseconds)
   // Default: 6 hours (21600000ms) - good balance for recipe sites
@@ -353,7 +357,78 @@ class RecipeCrawler {
   }
   private urlCooldownPeriod = 2 * 60 * 60 * 1000; // 2 hours for successful crawls
   private failedUrlCooldownPeriod = 15 * 60 * 1000; // 15 minutes for failed crawls
-  private maxSourcesPerCrawl = 8; // KISS: Limit to top sources per crawl
+  private maxSourcesPerCrawl = 12; // Increased for more variety
+
+  /**
+   * Human-like scraping for protected sites (AllRecipes, Food Network, etc.)
+   * Strategy: Be slow, patient, and don't try to trick the system
+   * - Wait 8+ seconds between requests to same domain
+   * - Use realistic browser headers
+   * - Establish session by visiting homepage first (if needed)
+   */
+  private async humanLikeScrape(url: string, domain: string): Promise<string | null> {
+    try {
+      // Respect per-domain rate limiting
+      const lastRequest = this.domainLastRequest.get(domain) || 0;
+      const elapsed = Date.now() - lastRequest;
+
+      if (elapsed < this.protectedSiteDelay) {
+        const waitTime = this.protectedSiteDelay - elapsed;
+        console.log(`Waiting ${Math.round(waitTime / 1000)}s for ${domain} rate limit...`);
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+      }
+
+      // Add human-like random jitter (0-3 seconds)
+      const jitter = Math.random() * 3000;
+      await new Promise(resolve => setTimeout(resolve, jitter));
+
+      // Update last request time
+      this.domainLastRequest.set(domain, Date.now());
+
+      // Use realistic Chrome headers
+      const headers = {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Cache-Control': 'max-age=0',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+        'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+        'Sec-Ch-Ua-Mobile': '?0',
+        'Sec-Ch-Ua-Platform': '"macOS"',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Sec-Fetch-User': '?1',
+      };
+
+      const response = await axios.get(url, {
+        headers,
+        timeout: 45000, // Longer timeout for slow sites
+        maxRedirects: 10,
+        validateStatus: (status) => status < 500, // Accept 4xx to analyze what went wrong
+      });
+
+      // Check if we got blocked
+      if (response.status === 403 || response.status === 429) {
+        console.log(`Protected site returned ${response.status} - increasing delay`);
+        this.protectedSiteDelay = Math.min(this.protectedSiteDelay * 1.5, 30000); // Max 30s delay
+        return null;
+      }
+
+      if (response.status === 200) {
+        // Success! We can try being slightly faster next time
+        this.protectedSiteDelay = Math.max(this.protectedSiteDelay * 0.95, 5000); // Min 5s delay
+        return response.data;
+      }
+
+      return null;
+    } catch (error: any) {
+      console.error(`Human-like scrape failed for ${url}:`, error.message);
+      return null;
+    }
+  }
 
   async startCrawling(cuisineType: string = "popular"): Promise<string> {
     const jobId = `crawl-${Date.now()}`;
@@ -500,7 +575,7 @@ class RecipeCrawler {
 
     // Performance: Discover in parallel with concurrency limit
     const allUrls: string[] = [];
-    const concurrency = 3; // Process 3 sources at a time
+    const concurrency = 6; // Process 6 sources at a time for better throughput
     
     for (let i = 0; i < sourcesToCrawl.length; i += concurrency) {
       const batch = sourcesToCrawl.slice(i, i + concurrency);
@@ -599,7 +674,7 @@ class RecipeCrawler {
     const job = this.activeCrawlJobs.get(jobId);
     if (!job) return;
 
-    const batchSize = 10; // Optimized batch size
+    const batchSize = 20; // Increased batch size for better throughput
 
     for (let i = 0; i < urls.length; i += batchSize) {
       const batch = urls.slice(i, i + batchSize);
@@ -643,51 +718,68 @@ class RecipeCrawler {
   }
 
   private async scrapeAndStoreRecipe(url: string): Promise<void> {
+    // Extract domain for tracking
+    const domain = new URL(url).hostname.replace('www.', '');
+
     try {
+      // Check if URL was already crawled (database check for persistence)
+      const alreadyCrawled = await storage.isUrlCrawled(url);
+      if (alreadyCrawled) {
+        console.log(`URL already crawled (from DB): ${url}`);
+        this.urlCache.set(url, true);
+        return;
+      }
+
       // Performance: Use efficient duplicate check
       const existing = await storage.getRecipeBySource(url);
       if (existing) {
         console.log(`Recipe already exists: ${url}`);
         this.urlCache.set(url, true);
+        await storage.markUrlCrawled(url, domain, true, existing.id);
         this.adaptiveRateLimiter.recordSuccess();
         return;
       }
 
       console.log(`Scraping recipe: ${url}`);
 
-      // Determine if we should use Playwright (for known difficult sites or as fallback)
-      const usePlaywright = url.includes('allrecipes.com') ||
-        url.includes('foodnetwork.com') ||
-        url.includes('bonappetit.com') ||
-        url.includes('epicurious.com');
+      // Check if this is a protected site that needs human-like pacing
+      const isProtectedSite = domain.includes('allrecipes') ||
+        domain.includes('foodnetwork') ||
+        domain.includes('bonappetit') ||
+        domain.includes('epicurious');
 
       let htmlContent: string | null = null;
 
-      if (usePlaywright) {
-        console.log(`Using Playwright for difficult site: ${url}`);
-        htmlContent = await playwrightCrawler.scrapePage(url);
+      if (isProtectedSite) {
+        // Human-like approach: slow and patient, no tricks
+        console.log(`Using human-speed scraping for protected site: ${domain}`);
+        htmlContent = await this.humanLikeScrape(url, domain);
       }
 
-      // Fallback to Axios if Playwright wasn't used or failed
+      // Standard approach for non-protected sites
       if (!htmlContent) {
         try {
           const response = await axios.get(url, {
             headers: {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-              'Accept-Language': 'en-US,en;q=0.5',
-              'Accept-Encoding': 'gzip, deflate',
-              'DNT': '1',
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+              'Accept-Language': 'en-US,en;q=0.9',
+              'Accept-Encoding': 'gzip, deflate, br',
+              'Cache-Control': 'max-age=0',
               'Connection': 'keep-alive',
               'Upgrade-Insecure-Requests': '1',
+              'Sec-Fetch-Dest': 'document',
+              'Sec-Fetch-Mode': 'navigate',
+              'Sec-Fetch-Site': 'none',
+              'Sec-Fetch-User': '?1',
             },
-            timeout: 20000,
+            timeout: 30000,
             maxRedirects: 5
           });
           htmlContent = response.data;
         } catch (axiosError) {
-          // If Axios fails and we haven't tried Playwright yet, try it now
-          if (!usePlaywright) {
+          // If Axios fails on a protected site, try Playwright as last resort
+          if (isProtectedSite) {
             console.log(`Axios failed for ${url}, retrying with Playwright...`);
             htmlContent = await playwrightCrawler.scrapePage(url);
           } else {
@@ -715,6 +807,7 @@ class RecipeCrawler {
 
       if (!recipeData) {
         this.urlCache.set(url, false);
+        await storage.markUrlCrawled(url, domain, false, undefined, 'No recipe data found');
         this.adaptiveRateLimiter.recordFailure();
         return;
       }
@@ -724,12 +817,14 @@ class RecipeCrawler {
         console.log(`Found collection page: ${recipeData.title} - extracting individual recipes`);
         await this.extractRecipesFromCollection(url, $);
         this.urlCache.set(url, true);
+        await storage.markUrlCrawled(url, domain, true, undefined, 'Collection page processed');
         return;
       }
 
       // Validate recipe has meaningful ingredients
       if (!recipeData.ingredients || recipeData.ingredients.length === 0) {
         this.urlCache.set(url, false);
+        await storage.markUrlCrawled(url, domain, false, undefined, 'No ingredients found');
         this.adaptiveRateLimiter.recordFailure();
         return;
       }
@@ -747,6 +842,7 @@ class RecipeCrawler {
 
       if (meaningfulIngredients.length === 0) {
         this.urlCache.set(url, false);
+        await storage.markUrlCrawled(url, domain, false, undefined, 'No meaningful ingredients');
         this.adaptiveRateLimiter.recordFailure();
         return;
       }
@@ -777,27 +873,34 @@ class RecipeCrawler {
 
       // Validate and store
       const validatedRecipe = insertRecipeSchema.parse(recipeWithMetadata);
-      await storage.createRecipe(validatedRecipe);
+      const savedRecipe = await storage.createRecipe(validatedRecipe);
 
-      // Mark as successful
+      // Mark as successful in both cache and database
       this.urlCache.set(url, true);
+      await storage.markUrlCrawled(url, domain, true, savedRecipe.id);
       this.adaptiveRateLimiter.recordSuccess();
 
       console.log(`Successfully scraped and stored: ${recipeData.title}`);
 
     } catch (error: any) {
       // Handle different types of errors
+      let errorMessage = 'Unknown error';
       if (error.response && error.response.status === 403) {
+        errorMessage = 'Access denied (403) - site blocking bots';
         console.log(`Access denied (403) for ${url} - site may be blocking bots`);
       } else if (error.response && error.response.status === 404) {
+        errorMessage = 'Page not found (404)';
         console.log(`Page not found (404) for ${url}`);
       } else if (error.code === 'ECONNABORTED') {
+        errorMessage = 'Timeout';
         console.log(`Timeout for ${url}`);
       } else {
+        errorMessage = error.message || 'Unknown error';
         console.error(`Error scraping ${url}:`, error.message || error);
       }
-      // Mark as failed
+      // Mark as failed in both cache and database
       this.urlCache.set(url, false);
+      await storage.markUrlCrawled(url, domain, false, undefined, errorMessage);
       this.adaptiveRateLimiter.recordFailure();
     }
   }

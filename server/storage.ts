@@ -1,4 +1,4 @@
-import { recipes, users, type Recipe, type InsertRecipe, type User, type UpsertUser, type SearchRecipeRequest } from "@shared/schema";
+import { recipes, users, crawledUrls, type Recipe, type InsertRecipe, type User, type UpsertUser, type SearchRecipeRequest, type CrawledUrl, type InsertCrawledUrl } from "@shared/schema";
 import { db } from "./db";
 import { eq, ilike, or, and, sql, lte, gte } from "drizzle-orm";
 
@@ -17,6 +17,10 @@ export interface IStorage {
   // User operations for authentication
   getUser(id: string): Promise<User | undefined>;
   upsertUser(user: UpsertUser): Promise<User>;
+  // Crawled URL tracking
+  isUrlCrawled(url: string): Promise<boolean>;
+  markUrlCrawled(url: string, domain: string, success: boolean, recipeId?: string, errorMessage?: string): Promise<void>;
+  getCrawledUrlStats(): Promise<{ total: number; successful: number; failed: number }>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -252,6 +256,72 @@ export class DatabaseStorage implements IStorage {
       })
       .returning();
     return user;
+  }
+
+  // Crawled URL tracking methods
+  async isUrlCrawled(url: string): Promise<boolean> {
+    try {
+      const [existing] = await db
+        .select({ id: crawledUrls.id })
+        .from(crawledUrls)
+        .where(eq(crawledUrls.url, url))
+        .limit(1);
+      return !!existing;
+    } catch (error) {
+      // Table might not exist yet, return false
+      return false;
+    }
+  }
+
+  async markUrlCrawled(
+    url: string,
+    domain: string,
+    success: boolean,
+    recipeId?: string,
+    errorMessage?: string
+  ): Promise<void> {
+    try {
+      await db
+        .insert(crawledUrls)
+        .values({
+          url,
+          domain,
+          success: success ? 1 : 0,
+          recipeId,
+          errorMessage,
+        })
+        .onConflictDoUpdate({
+          target: crawledUrls.url,
+          set: {
+            success: success ? 1 : 0,
+            recipeId,
+            errorMessage,
+            crawledAt: new Date(),
+          },
+        });
+    } catch (error) {
+      // Log but don't fail if table doesn't exist
+      console.error('Error marking URL as crawled:', error);
+    }
+  }
+
+  async getCrawledUrlStats(): Promise<{ total: number; successful: number; failed: number }> {
+    try {
+      const [stats] = await db
+        .select({
+          total: sql<number>`COUNT(*)`,
+          successful: sql<number>`SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END)`,
+          failed: sql<number>`SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END)`,
+        })
+        .from(crawledUrls);
+      return {
+        total: Number(stats?.total || 0),
+        successful: Number(stats?.successful || 0),
+        failed: Number(stats?.failed || 0),
+      };
+    } catch (error) {
+      return { total: 0, successful: 0, failed: 0 };
+    }
   }
 }
 

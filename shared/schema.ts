@@ -130,6 +130,24 @@ export const users = pgTable("users", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+// Crawled URLs tracking table - persists across server restarts
+export const crawledUrls = pgTable("crawled_urls", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  url: text("url").notNull().unique(),
+  domain: text("domain").notNull(), // e.g., 'allrecipes.com'
+  success: integer("success").notNull().default(0), // 0 = failed, 1 = success
+  recipeId: varchar("recipe_id"), // Link to recipe if successful
+  crawledAt: timestamp("crawled_at").defaultNow(),
+  errorMessage: text("error_message"), // Store error for debugging
+}, (table) => [
+  index("idx_crawled_url").on(table.url),
+  index("idx_crawled_domain").on(table.domain),
+  index("idx_crawled_at").on(table.crawledAt),
+]);
+
+export type CrawledUrl = typeof crawledUrls.$inferSelect;
+export type InsertCrawledUrl = typeof crawledUrls.$inferInsert;
+
 export type UpsertUser = typeof users.$inferInsert;
 export type User = typeof users.$inferSelect;
 export type InsertRecipe = z.infer<typeof insertRecipeSchema>;
