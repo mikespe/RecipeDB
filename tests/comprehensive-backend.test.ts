@@ -5,7 +5,7 @@
 
 import { describe, it, expect, beforeAll, afterAll } from '@jest/globals';
 
-const API_BASE = 'http://localhost:5000';
+const API_BASE = process.env.API_BASE || 'http://localhost:3001';
 
 describe('Backend API Comprehensive Tests', () => {
   beforeAll(async () => {

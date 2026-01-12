@@ -6,9 +6,11 @@
 
 import { describe, it, expect, beforeAll } from '@jest/globals';
 
+const API_BASE = process.env.API_BASE || 'http://localhost:3001';
+
 // Simulate frontend data fetching logic
 async function fetchRecipes(page = 1, limit = 10) {
-  const response = await fetch(`http://localhost:5000/api/recipes/paginated?page=${page}&limit=${limit}`);
+  const response = await fetch(`${API_BASE}/api/recipes/paginated?page=${page}&limit=${limit}`);
   if (!response.ok) throw new Error('Failed to fetch recipes');
   const result = await response.json();
   // Handle nested response structure: {success: true, recipes: {recipes: [...], total, hasMore}}
@@ -16,7 +18,7 @@ async function fetchRecipes(page = 1, limit = 10) {
 }
 
 async function searchRecipes(query: string) {
-  const response = await fetch(`http://localhost:5000/api/recipes/search?q=${encodeURIComponent(query)}`);
+  const response = await fetch(`${API_BASE}/api/recipes/search?q=${encodeURIComponent(query)}`);
   if (!response.ok) throw new Error('Failed to search recipes');
   const result = await response.json();
   // Handle potential nested response structure
@@ -156,7 +158,7 @@ describe('Error Scenarios Frontend Should Handle', () => {
   it('should handle API errors gracefully', async () => {
     // Test what happens when API returns an error
     try {
-      const response = await fetch('http://localhost:5000/api/recipes/paginated?page=-1');
+      const response = await fetch(`${API_BASE}/api/recipes/paginated?page=-1`);
       const data = await response.json();
       
       // Frontend should handle both error responses and empty data

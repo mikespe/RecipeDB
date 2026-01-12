@@ -6,6 +6,8 @@ import { recipeCrawler } from "./crawler";
 import { configureCORS, configureSecurityHeaders, applyRateLimiting } from "./middleware/security";
 import { requestIdMiddleware } from "./middleware/request-id";
 import { logger } from "./utils/logger";
+import { RecipeSanitizer } from "./services/recipe-sanitizer";
+import { SanitizationTracker } from "./services/sanitization-tracker";
 
 const app = express();
 
@@ -151,6 +153,43 @@ process.on('uncaughtException', (error) => {
       environment: process.env.NODE_ENV || 'development',
       nodeVersion: process.version,
     });
+
+    // Run one-time recipe sanitization if enabled
+    // Set SANITIZE_RECIPES_ONCE=true in environment to enable
+    if (process.env.SANITIZE_RECIPES_ONCE === 'true') {
+      setTimeout(async () => {
+        try {
+          const hasRun = await SanitizationTracker.hasRun();
+          if (hasRun) {
+            logger.info('Recipe sanitization already completed - skipping');
+            const lastRun = await SanitizationTracker.getLastRun();
+            if (lastRun) {
+              logger.info(`Last sanitization: ${lastRun.lastRun.toISOString()} (${lastRun.recipesFixed} recipes fixed)`);
+            }
+          } else {
+            logger.info('Running one-time recipe sanitization...');
+            const result = await RecipeSanitizer.sanitizeAll({
+              dryRun: false,
+              maxFixes: Infinity, // Check all
+              delayBetweenMs: 500, // Gentle delays
+              htmlOnly: true, // Start with HTML cleanup
+            });
+
+            await SanitizationTracker.recordRun(result.totalChecked, result.fixed);
+
+            logger.info('Recipe sanitization complete', {
+              totalChecked: result.totalChecked,
+              issuesFound: result.incompleteFound,
+              fixed: result.fixed,
+              failed: result.failed,
+            });
+          }
+        } catch (error) {
+          logger.error('Error during recipe sanitization', error);
+          // Don't crash the server if sanitization fails
+        }
+      }, 3000); // Wait 3 seconds after server start
+    }
 
     // Start automatic recipe crawling after server is ready
     setTimeout(() => {

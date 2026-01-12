@@ -4,7 +4,7 @@
 
 import { describe, it, expect } from '@jest/globals';
 
-const API_BASE = 'http://localhost:5000';
+const API_BASE = process.env.API_BASE || 'http://localhost:3001';
 
 describe('Recipe Display Debug Tests', () => {
   it('should verify paginated API structure matches frontend expectations', async () => {

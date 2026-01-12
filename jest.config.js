@@ -12,7 +12,7 @@ export default {
   verbose: true,
   testTimeout: 30000,
   transform: {
-    '^.+\\.ts$': 'babel-jest',
+    '^.+\\.ts$': ['babel-jest', { configFile: './babel.config.cjs' }],
   },
   moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/client/src/$1',

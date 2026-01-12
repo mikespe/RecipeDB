@@ -249,9 +249,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/admin/sanitize-recipes", ResponseHandler.asyncHandler(async (req: Request, res: Response) => {
     const { secretKey } = req.body;
 
-    // Simple protection - require a secret key
-    if (secretKey !== process.env.ADMIN_SECRET && secretKey !== 'sanitize-2026') {
-      return ResponseHandler.sendError(res, 401, "Unauthorized");
+    // Require ADMIN_SECRET environment variable for authentication
+    if (!process.env.ADMIN_SECRET || secretKey !== process.env.ADMIN_SECRET) {
+      return ResponseHandler.sendError(res, 401, "Unauthorized - ADMIN_SECRET required");
     }
 
     console.log('Starting recipe sanitization via API...');
@@ -326,6 +326,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
       errors: errorCount,
       sanitizedRecipes: sanitizedTitles
     }, `Sanitization complete: ${sanitizedCount} recipes cleaned`);
+  }));
+
+  // Recipe quality sanitization endpoint - validates and fixes incomplete recipes
+  app.post("/api/admin/validate-recipes", ResponseHandler.asyncHandler(async (req: Request, res: Response) => {
+    const { secretKey, dryRun = true, maxFixes = 50, htmlOnly = false } = req.body;
+
+    // Require ADMIN_SECRET environment variable for authentication
+    if (!process.env.ADMIN_SECRET || secretKey !== process.env.ADMIN_SECRET) {
+      return ResponseHandler.sendError(res, 401, "Unauthorized - ADMIN_SECRET required");
+    }
+
+    // Import sanitizer dynamically to avoid circular dependencies
+    const { RecipeSanitizer } = await import('./services/recipe-sanitizer');
+
+    console.log(`Starting recipe validation (dryRun: ${dryRun}, maxFixes: ${maxFixes})...`);
+
+    try {
+      // No cap - process all entries. Use maxFixes=0 or omit to check all
+      const maxFixesNum = parseInt(String(maxFixes), 10);
+      const result = await RecipeSanitizer.sanitizeAll({
+        dryRun: dryRun === true || dryRun === 'true',
+        maxFixes: maxFixesNum > 0 ? maxFixesNum : Infinity, // 0 or omitted = check all
+        delayBetweenMs: htmlOnly ? 50 : 2000, // Fast for HTML-only, slow for re-scraping
+        htmlOnly: htmlOnly === true || htmlOnly === 'true',
+      });
+
+      ResponseHandler.sendSuccess(res, result,
+        dryRun
+          ? `Validation complete (dry run): ${result.incompleteFound} recipes need fixing`
+          : `Validation complete: ${result.fixed} recipes fixed, ${result.failed} failed`
+      );
+    } catch (error) {
+      console.error("Recipe validation error:", error);
+      ResponseHandler.sendError(res, 500, error instanceof Error ? error.message : "Validation failed");
+    }
   }));
 
   // Test ultimate bypass endpoint

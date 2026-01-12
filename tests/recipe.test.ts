@@ -12,7 +12,7 @@
 import { describe, it, expect, beforeAll, afterAll } from '@jest/globals';
 
 // Mock environment for testing
-const API_BASE = 'http://localhost:5000';
+const API_BASE = process.env.API_BASE || 'http://localhost:3001';
 
 describe('Recipe API Tests', () => {
   beforeAll(async () => {

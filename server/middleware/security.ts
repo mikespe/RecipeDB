@@ -17,14 +17,19 @@ export function configureCORS(app: Express) {
     ? process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim())
     : process.env.NODE_ENV === 'production'
     ? [] // Must be set in production
-    : ['http://localhost:5000', 'http://localhost:5001', 'http://127.0.0.1:5000', 'http://127.0.0.1:5001'];
+    : ['http://localhost:3001', 'http://localhost:5000', 'http://localhost:5001', 'http://127.0.0.1:3001', 'http://127.0.0.1:5000', 'http://127.0.0.1:5001', 'http://[::1]:3001', 'http://[::1]:5000', 'http://[::1]:5001'];
 
   app.use((req, res, next) => {
-    // Skip CORS for static assets - they're served from the same origin
-    // Static assets don't need CORS checks
-    if (req.path.startsWith('/assets/') || 
+    // Skip CORS for static assets, HTML files, and Vite dev server paths
+    // These are served from the same origin and don't need CORS checks
+    if (req.path === '/' ||
+        req.path.startsWith('/assets/') ||
         req.path.startsWith('/src/') ||
-        req.path.match(/\.(js|css|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot)$/)) {
+        req.path.startsWith('/@vite/') ||
+        req.path.startsWith('/@react-refresh') ||
+        req.path.startsWith('/@fs/') ||
+        req.path.startsWith('/node_modules/') ||
+        req.path.match(/\.(js|css|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot|html|map|mjs)$/)) {
       return next();
     }
 
@@ -59,13 +64,16 @@ export function configureCORS(app: Express) {
  * Configure Security Headers with Helmet
  */
 export function configureSecurityHeaders(app: Express) {
+  const isDev = process.env.NODE_ENV === 'development';
+
   app.use(helmet({
-    contentSecurityPolicy: {
+    // Disable CSP in development for Vite HMR compatibility
+    contentSecurityPolicy: isDev ? false : {
       directives: {
         defaultSrc: ["'self'"],
-        styleSrc: ["'self'", "'unsafe-inline'"], // Needed for Vite HMR
-        scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"], // Needed for Vite in dev
-        imgSrc: ["'self'", 'data:', 'https:', 'http:'], // Allow recipe images from any source
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
+        imgSrc: ["'self'", 'data:', 'https:', 'http:'],
         connectSrc: ["'self'", 'https://*.googleapis.com', 'https://*.google.com'],
         fontSrc: ["'self'", 'data:'],
       },
